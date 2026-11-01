@@ -101,6 +101,26 @@ npm run channel -- --prune 5     # keep only the newest five versions
 
 `scripts/check-manifest.mjs` is the guard that runs before a publish: a file missing from `files`, an `exports` target outside it, the two halves disagreeing about the route prefix or the plugin id, a missing `engines.dsh` — all fail before `npm publish` rather than on someone else's machine.
 
+### Push to GitHub and cut a release (how this repository is published)
+
+```pwsh
+# Push with the dedicated deploy key (no PAT on this machine; the public half is
+# registered under GitHub → Settings → SSH keys, the private one lives at
+# ~/.ssh/id_ed25519_dsh).
+$key = ($env:USERPROFILE -replace '\\','/') + '/.ssh/id_ed25519_dsh'
+$env:GIT_SSH_COMMAND = "ssh -i $key -o IdentitiesOnly=yes -o BatchMode=yes"
+
+npm run check                                  # guard + both test suites
+# bump package.json version and CHANGELOG.md
+git add -A
+git commit -m "0.4.5: …"
+git tag -a v0.4.5 -m "dsh-context-control 0.4.5"   # the tag must equal the version
+git push origin main
+git push origin v0.4.5
+```
+
+The `Publish` workflow runs on the tag: it checks `tag == version`, runs `npm run check`, publishes to npm only when `NPM_TOKEN` exists, packs the tarball, builds `channel.json`, and creates the release with `dsh-context-control.tgz` (stable name), `dsh-context-control-<version>.tgz` and `channel.json` attached — about ten seconds. Installed copies notice it on their next check at `https://github.com/<owner>/<repo>/releases/latest/download/channel.json`.
+
 ## Configuration
 
 In `~/.dsh/profiles/web/cordis.patch.yml`:

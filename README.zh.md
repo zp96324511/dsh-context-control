@@ -115,6 +115,25 @@ npm run channel -- --prune 5        # 只保留最近 5 个版本
 
 `scripts/check-manifest.mjs` 是发布前的守卫：`files` 漏了某个文件、`exports` 指向了没发布的东西、宿主与客户端的路由前缀写岔了、两半的插件 id 与包名不一致——都在 `npm publish` 之前失败，而不是在别人的机器上。
 
+### 推到 GitHub 并出 release（本仓库的实际流程）
+
+```pwsh
+# 用专用部署密钥推送（本机没有 PAT；密钥已加到账号 ~/.ssh/id_ed25519_dsh，
+# 对应的公钥在 GitHub → Settings → SSH keys。仓库本地已设 user.name/email。）
+$key = ($env:USERPROFILE -replace '\\','/') + '/.ssh/id_ed25519_dsh'
+$env:GIT_SSH_COMMAND = "ssh -i $key -o IdentitiesOnly=yes -o BatchMode=yes"
+
+npm run check                                  # 清单守卫 + 两套测试
+# 改 package.json 的 version 与 CHANGELOG.md
+git add -A
+git commit -m "0.4.5: …"
+git tag -a v0.4.5 -m "dsh-context-control 0.4.5"   # tag 必须等于 version，工作流会校验
+git push origin main
+git push origin v0.4.5
+```
+
+`Publish` 工作流在 tag 推送后自动跑：校验 `tag == version` → `npm run check` →（配了 `NPM_TOKEN` 才发 npm）→ `npm pack` → 生成 `channel.json` → 建 release 并附上 `dsh-context-control.tgz`（稳定名）、`dsh-context-control-<版本>.tgz`、`channel.json`，约十秒出结果。已安装的机器下一次检查就会看到它：`https://github.com/<owner>/<repo>/releases/latest/download/channel.json`。
+
 ## 配置
 
 在 `~/.dsh/profiles/web/cordis.patch.yml` 里：
