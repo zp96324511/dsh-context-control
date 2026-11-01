@@ -47,6 +47,8 @@ dsh plugin --profile web add http://<你的站>/dsh-context-control/dsh-context-
 
 装完重启一次 `dsh web`（第一次加载需要重启；之后的升级由插件自己处理，见下）。
 
+> 想手动换到某个具体版本，用带 tag 的地址：`.../releases/download/v0.4.3/dsh-context-control.tgz`。重复安装**同一个** `releases/latest/download/...` 地址会被 pnpm 视为 spec 未变而跳过（面板里的一键升级不受影响，它每次都用 channel.json 给出的 tag 地址）。
+
 ## 升级
 
 ### 在哪里点

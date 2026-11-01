@@ -47,6 +47,11 @@ No configuration is needed to find the channel: the plugin takes the directory o
 
 Restart `dsh web` once after installing; upgrades after that are handled by the plugin itself.
 
+> To pin a specific version, install the tagged asset
+> (`.../releases/download/v0.4.3/dsh-context-control.tgz`). Re-installing the *same*
+> `releases/latest/download/...` URL is a pnpm no-op — the spec did not change. The
+> in-panel upgrade is unaffected: it always installs the tag named by `channel.json`.
+
 ## Upgrade
 
 ### Where

@@ -4,6 +4,12 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.4.4 — 2026-11-01
+
+- Docs: re-installing the same `releases/latest/download/...` URL is a pnpm
+  no-op because the spec is unchanged; the in-panel upgrade is unaffected
+  because it installs the tag named by `channel.json`.
+
 ## 0.4.3 — 2026-11-01
 
 - Publish channel: GitHub Releases is now the documented default
