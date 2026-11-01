@@ -105,6 +105,18 @@ test('the channel follows the install spec unless one is configured', () => {
   assert.equal(tarball.manifestUrl, 'https://host/dl/channel.json')
   assert.equal(tarball.origin, 'spec')
 
+  /* A GitHub Release install: an upgrade rewrites the dependency to the tagged
+   * asset, so the sibling channel.json would be frozen at that tag. The
+   * repository-level stable path is the one that keeps following `latest`. */
+  for (const spec of [
+    'https://github.com/owner/repo/releases/latest/download/dsh-context-control.tgz',
+    'https://github.com/owner/repo/releases/download/v0.4.1/dsh-context-control.tgz',
+  ]) {
+    const githubRelease = resolveChannel({ config: { update: {} }, profile: { kind: 'tarball', url: spec } })
+    assert.equal(githubRelease.kind, 'manifest')
+    assert.equal(githubRelease.manifestUrl, 'https://github.com/owner/repo/releases/latest/download/channel.json', spec)
+  }
+
   const registry = resolveChannel({
     config: { update: { registry: 'https://registry.example/' } },
     profile: { kind: 'registry', range: '^0.2.0' },

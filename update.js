@@ -410,10 +410,19 @@ export function resolveChannel({ config, profile }) {
     return { kind: 'github', name, repo, origin: 'config' }
   }
   if (kind === 'tarball') {
-    // The channel document sits next to the tarball the profile already
-    // points at: `<dir>/channel.json`. That is what scripts/publish-channel.mjs
-    // writes, and it means a tarball install upgrades from where it came from.
+    // The channel document ships beside the tarballs: `<dir>/channel.json`.
+    // That is what scripts/publish-channel.mjs writes, and it means a tarball
+    // install upgrades from where it came from.
     const url = profile.url.split(/[?#]/)[0]
+    // A GitHub Release URL is the one case where the sibling is wrong: an
+    // upgrade rewrites the dependency to the *tagged* asset
+    // (`releases/download/v0.4.1/…`), whose sibling channel.json is frozen at
+    // that tag and would never see the next release. The repository-level
+    // stable path always follows `latest`.
+    const release = /^(https?:\/\/github\.com\/[^/]+\/[^/]+)\/releases\/(?:latest\/)?download\//i.exec(url)
+    if (release !== null) {
+      return { kind: 'manifest', name, manifestUrl: `${release[1]}/releases/latest/download/channel.json`, origin: 'spec' }
+    }
     return { kind: 'manifest', name, manifestUrl: new URL('channel.json', url).href, origin: 'spec' }
   }
   if (kind === 'link' || kind === 'file') {
