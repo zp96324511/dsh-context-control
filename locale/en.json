@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Context Control",
+    "description": "Per-session MCP and skill visibility: new sessions start lean; enable entries on demand from the composer panel or through the model. Choices are remembered per project."
+  }
+}

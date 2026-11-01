@@ -1,0 +1,117 @@
+name: Publish
+
+# A release is cut from a tag, and the tag is the version. Three artefacts come
+# out of one run, because the plugin can be installed three ways and all three
+# must point at the same bytes:
+#
+#   npm                         dsh plugin add dsh-context-control
+#   GitHub Release (versioned)  <pkg>-<version>.tgz, for pinning a machine
+#   GitHub Release (stable)     <pkg>.tgz, the URL a channel document names
+#
+# The stable name is deliberate: `releases/latest/download/<name>.tgz` resolves
+# `latest` when it is requested but takes the filename literally, so a versioned
+# filename works today and 404s the moment the next release moves `latest`.
+#
+# npm publishing is optional: without an NPM_TOKEN secret the job still produces
+# the release assets, which is all a self-hosted channel needs.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish (must equal the package version, e.g. v0.3.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write # create the GitHub Release and upload its assets
+  id-token: write # npm trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: The tag is the version
+        run: |
+          node -e "const v=require('./package.json').version; const t=process.env.TAG.replace(/^v/,''); if (v!==t) { console.error('package version ' + v + ' != tag ' + t); process.exit(1); }"
+
+      - name: Manifest guard and tests
+        run: npm run check
+
+      # Re-runnable on purpose: a run that died between publishing and
+      # attaching must be repeatable, and npm rejects an existing version.
+      - name: Publish to npm (skipped without a token)
+        if: env.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          published() { npm view "${PKG}@${VERSION}" version >/dev/null 2>&1; }
+          if published; then
+            echo "::notice::${PKG}@${VERSION} is already on npm — skipping"
+          else
+            npm publish --provenance --access public
+          fi
+
+      - name: Pack the prebuilt tarball
+        run: |
+          npm pack
+          PKG=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          # The stable, version-free name is the one a channel document points at.
+          cp "${PKG}-${VERSION}.tgz" "${PKG##*/}.tgz"
+          ls -l ./*.tgz
+
+      - name: Build a channel document for this release
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          node --input-type=module -e "
+            import { createHash } from 'node:crypto'
+            import { readFileSync, writeFileSync } from 'node:fs'
+            const name = process.env.PKG ?? '${PKG}'
+            const version = '${VERSION}'
+            const file = name.replace(/^@[^/]+\//, '') + '.tgz'
+            const bytes = readFileSync(file)
+            const channel = {
+              name,
+              channel: 'stable',
+              latest: version,
+              updatedAt: new Date().toISOString(),
+              homepage: 'https://github.com/' + process.env.GITHUB_REPOSITORY,
+              versions: {
+                [version]: {
+                  url: 'https://github.com/' + process.env.GITHUB_REPOSITORY + '/releases/download/v' + version + '/' + file,
+                  sha256: createHash('sha256').update(bytes).digest('hex'),
+                  size: bytes.length,
+                  engines: JSON.parse(readFileSync('package.json', 'utf8')).engines ?? {},
+                  publishedAt: new Date().toISOString(),
+                },
+              },
+            }
+            writeFileSync('channel.json', JSON.stringify(channel, null, 2) + '\n')
+          "
+
+      - name: Attach the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          gh release upload "$TAG" "${PKG##*/}.tgz" "${PKG}-${VERSION}.tgz" channel.json --clobber

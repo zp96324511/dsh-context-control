@@ -1,0 +1,11 @@
+# Build output of `npm run channel`
+dist/
+
+# Installed dependencies. `node_modules` here is a junction into the DSH
+# installation, kept only so a local checkout can resolve `@deepseek-ai/*`
+# the way an installed profile would.
+node_modules/
+
+# Local diagnostics
+*.log
+dshdiag/

@@ -1,0 +1,54 @@
+name: CI
+
+# Every push and PR: the manifest guard, both test suites, and a real tarball
+# that is then installed and booted. The boot check matters because the two
+# halves are loaded by DSH, not by these tests: a file that `files` forgot is
+# invisible until an actual profile tries to activate the plugin.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Manifest guard and tests
+        run: npm run check
+
+      - name: Pack the tarball
+        run: npm pack --json > pack.json && node -e "const p=require('./pack.json')[0]; console.log(p.filename, p.size + ' bytes', p.files.length + ' files')"
+
+      - name: The tarball contains both halves and the updater
+        run: |
+          TARBALL=$(node -p "require('./pack.json')[0].filename")
+          tar -tzf "$TARBALL" | sort
+          for required in package/index.js package/client.js package/update.js package/respawn.cjs package/cordis.patch.yml; do
+            tar -tzf "$TARBALL" | grep -qx "$required" || { echo "::error::$required is missing from the tarball"; exit 1; }
+          done
+
+      - name: Install the tarball into a throwaway profile and boot it
+        run: |
+          # A profile is just a directory with a package.json; DSH composes it
+          # from the bundles listed there. Booting it proves the declarer can
+          # resolve this package from node_modules the way an install does.
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          npm install -g pnpm@latest
+          npx -y --package @deepseek-ai/dsh dsh plugin --profile web add "$PWD/$(node -p "require('./pack.json')[0].filename")" || true
+          node -e "
+            const fs=require('fs');
+            const p='$DSH_HOME/profiles/web/package.json';
+            console.log(fs.existsSync(p) ? fs.readFileSync(p,'utf8') : 'no profile manifest');
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: "*.tgz"

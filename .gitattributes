@@ -1,0 +1,5 @@
+# Keep the repository LF: the package is loaded by Node on both platforms, and
+# the CI matrix assumes the checked-out bytes match the published tarball.
+* text=auto eol=lf
+*.tgz binary
+*.png binary
