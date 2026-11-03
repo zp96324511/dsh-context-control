@@ -190,6 +190,7 @@ window.__ModuleLoader__.load({
         updateUnavailable: '升级不可用',
         updateLocal: '本地安装，不提供在线升级',
         updateError: '检查失败',
+        hostStale: '宿主仍在运行旧版插件（升级接口 404）——重启 dsh web 后可用',
         updateAvailableTip: '有新版本',
         reloadHint: '已升级，刷新后生效',
         compatible: '与当前 DSH 兼容',
@@ -222,6 +223,7 @@ window.__ModuleLoader__.load({
         updateUnavailable: 'Updates unavailable',
         updateLocal: 'Local install — no online upgrade',
         updateError: 'Check failed',
+        hostStale: 'the host still runs the old plugin (route 404) — restart dsh web',
         updateAvailableTip: 'update available',
         reloadHint: 'upgraded — reload to apply',
         compatible: 'compatible with this DSH',
@@ -517,6 +519,16 @@ window.__ModuleLoader__.load({
             body: body === undefined ? undefined : JSON.stringify(body),
           })
           const text = await response.text()
+          /* A non-OK response is not an answer. The one real case: the page
+           * runs the new client bundle (the host serves it from disk) while
+           * the process still runs the old host half, so every update route
+           * answers 404 with an empty body — which parsed as {} and rendered
+           * as "up to date" with no version, the exact opposite of the truth.
+           * Name the situation instead of guessing. */
+          if (!response.ok) {
+            if (response.status === 404) throw new Error(t('hostStale'))
+            throw new Error(`HTTP ${response.status}`)
+          }
           let parsed
           try { parsed = text === '' ? {} : JSON.parse(text) } catch { throw new Error(`unexpected response: ${text.slice(0, 140)}`) }
           return parsed
@@ -532,10 +544,15 @@ window.__ModuleLoader__.load({
           if (updateStore.get().info === undefined) updateStore.set({ phase: 'checking' })
           try {
             const info = await updateRequest(`/update${force ? '?force=1' : ''}`)
-            if (bootVersion === undefined && typeof info?.current === 'string') bootVersion = info.current
-            const reloadNeeded = bootVersion !== undefined
-              && typeof info?.current === 'string'
-              && info.current !== bootVersion
+            /* A 200 whose body is not our check result (a proxy page, an
+             * auth redirect) must never pass for "current": only a payload
+             * that names its version is an answer. */
+            if (typeof info?.current !== 'string') {
+              updateStore.set({ phase: 'error', info: undefined, error: t('updateError'), job: undefined })
+              return
+            }
+            if (bootVersion === undefined) bootVersion = info.current
+            const reloadNeeded = bootVersion !== undefined && info.current !== bootVersion
             if (reloadNeeded) {
               updateStore.set({ phase: 'reload', info, error: undefined, job: updateStore.get().job })
             } else if (info?.channel?.kind === 'local' || info?.channel?.kind === 'git') {

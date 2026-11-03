@@ -4,6 +4,18 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.4.5 — 2026-11-04
+
+- Fix: a 404 from the update routes (the new client bundle is served from disk
+  while the process still runs the old host half) was parsed as an empty
+  object and rendered as `v— · 已是最新` — the opposite of the truth. A
+  non-OK response is now an error, and the 404 names its cause: the host must
+  be restarted.
+- Fix: a 200 whose body does not name a version is no longer accepted as a
+  check result (a proxy page or an auth redirect could pass for "current").
+- Tests: the client harness now reloads the module the way a page reload does
+  (a distinct ES module instance) and covers both the stale-host click and the
+  once-per-page auto check.
 ## 0.4.4 — 2026-11-01
 
 - Docs: re-installing the same `releases/latest/download/...` URL is a pnpm
@@ -35,3 +47,4 @@ is what an installed copy reads to discover the next version.
   an upgrade.
 - Publish guard (`scripts/check-manifest.mjs`), channel builder and local
   channel server; 20 host tests and 29 offline client tests.
+

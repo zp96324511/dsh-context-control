@@ -262,6 +262,7 @@ const DICT_ZH = {
   hideDetails: '收起', updateUnavailable: '升级不可用', updateLocal: '本地安装，不提供在线升级',
   updateError: '检查失败', updateAvailableTip: '有新版本', compatible: '与当前 DSH 兼容',
   reloadHint: '已升级，刷新后生效',
+  hostStale: '宿主仍在运行旧版插件（升级接口 404）——重启 dsh web 后可用',
   incompatible: '与当前 DSH 不兼容',
 };
 
@@ -280,6 +281,12 @@ const fetchStub = async (url, init) => {
   const method = String(init?.method ?? 'GET').toUpperCase();
   fetchCalls.push([method, path, init?.body]);
   const answer = (body) => ({ ok: true, status: 200, async text() { return JSON.stringify(body); } });
+  /* The real failure this guards against: the page runs the new client bundle
+   * (the host serves it from disk) while the process still runs the old host
+   * half, so every update route is a 404 with an empty body. */
+  const notFound = () => ({ ok: false, status: 404, async text() { return ''; } });
+  if (fetchMode === 'stale' && path.startsWith('/update')) return notFound();
+  if (fetchMode === 'blank' && path.startsWith('/update/job')) return notFound();
   if (path.startsWith('/update/job')) {
     updateJobCalls += 1;
     return answer(updateJobCalls === 1
@@ -390,6 +397,24 @@ const fakeCtx = {
   });
 
   await plugin.apply(fakeCtx);
+
+  /* A page reload starts the module over: a fresh update store with no
+   * remembered version, and the once-per-page auto check runs again. The
+   * package is `"type": "module"`, so the file is an ES module and
+   * `require.cache` does not control it — a distinct query string is what
+   * gives a genuinely new instance. */
+  let reloadCount = 0;
+  const reloadPage = async () => {
+    const { pathToFileURL } = require('node:url');
+    reloadCount += 1;
+    captured.config = undefined;
+    await import(`${pathToFileURL(CLIENT).href}?reload=${reloadCount}`);
+    const freshFactory = captured.config?.factory;
+    if (typeof freshFactory !== 'function') throw new Error('reload did not capture a factory');
+    const freshPlugin = freshFactory(requireStub);
+    await freshPlugin.apply(fakeCtx);
+    return registered.component;
+  };
 
   check('slot registration uses conversation.input.left', () => {
     assert(registered !== null, 'no slot registration');
@@ -734,6 +759,57 @@ const fakeCtx = {
     assert(textOf(action) === '刷新页面', `action reads ${textOf(action)}`);
     assert(textOf(staleTree).includes('刷新后生效'), 'the reload hint is missing');
   });
+  /* The stale host: the new client bundle is served from disk, but the process
+   * still runs the old host half, so `/update` answers 404 with an empty body.
+   * That used to parse as {} and render as "up to date" with `v—`, which is the
+   * opposite of the truth. A reload is what a user actually does here. */
+  fetchMode = 'stale';
+  instances = new Map();
+  nodeCache.clear();
+  activeElement = null;
+  const FreshPill = await reloadPage();
+  let staleHostTree = mount({ type: FreshPill, props: { sessionId: 's1' } });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  staleHostTree = mount({ type: FreshPill, props: { sessionId: 's1' } });
+  const staleHostAnchor = find(staleHostTree, (element) => element.props?.['data-context-control'] === 'anchor')[0];
+  staleHostAnchor.children[0].props.onClick();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  staleHostTree = mount({ type: FreshPill, props: { sessionId: 's1' } });
+
+  check('a 404 from the host is an error, never "up to date"', () => {
+    const action = actionOf(staleHostTree);
+    assert(action.props['data-context-control-phase'] === 'error',
+      `phase is ${action.props['data-context-control-phase']} (a 404 was read as an answer)`);
+    const note = textOf(staleHostTree);
+    assert(!note.includes('已是最新'), `a 404 rendered as up to date: "${note}"`);
+    assert(note.includes('重启 dsh web'), `the stale-host hint is missing: "${note}"`);
+    /* Nothing is known yet, so the label must not invent a version. */
+    assert(note.includes('v—'), `unknown version should stay blank, got "${note}"`);
+    assert(textOf(action) === '重试', `action reads ${textOf(action)}`);
+  });
+
+  /* The same stale host, seen by a page whose auto check is the only caller:
+   * it must not leave the row stuck on "checking" either. */
+  fetchMode = 'stale';
+  instances = new Map();
+  nodeCache.clear();
+  const SecondPill = await reloadPage();
+  let autoTree = mount({ type: SecondPill, props: { sessionId: 's1' } });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  autoTree = mount({ type: SecondPill, props: { sessionId: 's1' } });
+  const autoAnchor = find(autoTree, (element) => element.props?.['data-context-control'] === 'anchor')[0];
+  autoAnchor.children[0].props.onClick();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  autoTree = mount({ type: SecondPill, props: { sessionId: 's1' } });
+
+  check('the page auto check settles on the error, not on "checking"', () => {
+    const action = actionOf(autoTree);
+    assert(action !== undefined, 'no update row after the auto check');
+    assert(action.props['data-context-control-phase'] === 'error',
+      `auto check left the row at ${action.props['data-context-control-phase']}`);
+    assert(textOf(action) === '重试', `action reads ${textOf(action)}`);
+  });
+
   console.log(results.join('\n'));
   const failed = results.filter((line) => line.startsWith('FAIL')).length;
   console.log(`\n${results.length - failed}/${results.length} passed`);
