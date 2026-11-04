@@ -49,10 +49,26 @@ function harness() {
     { name: 'probe-dsh', source: 'user-dsh', description: 'from ~/.dsh/skills' },
   ]
 
+  /* Built-in tool view: two gateable tools, one protected entry point, one MCP
+   * tool (gated through its server, never through the tool list). */
+  const toolSchemas = [
+    { name: 'read', description: 'read a file', parameters: { type: 'object', properties: { path: { type: 'string' } } } },
+    { name: 'bash', description: 'run a command', parameters: { type: 'object', properties: { command: { type: 'string' } } } },
+    { name: 'run_code', description: 'PTC entry point', parameters: { type: 'object', properties: {} } },
+    { name: 'mcp__demo__thing', description: 'MCP tool', parameters: { type: 'object', properties: {} } },
+  ]
+  const denied = new Set()
+  const restrictCalls = []
+  const filteredSchemas = () => toolSchemas.filter((schema) => !denied.has(schema.name))
+
   const ctx = {
     logger: { warn: () => {}, info: () => {} },
     storageDomain: { open: async () => { throw new Error('no storage domain in the harness') } },
-    tools: { schemas: () => [], register: () => () => {}, restrict: () => () => {} },
+    tools: {
+      schemas: () => toolSchemas,
+      register: () => () => {},
+      restrict: () => () => {},
+    },
     agents: { list: () => [] },
     skills: {
       list: async (options = {}) => {
@@ -90,7 +106,15 @@ function harness() {
    * `agent.ctx.skills` directly throws, exactly like a real agent context, so
    * a regression to that shape fails this test instead of warning in the log. */
   const agentCtx = {
-    tools: { schemas: () => [] },
+    tools: {
+      schemas: () => filteredSchemas(),
+      restrict: (filter) => {
+        restrictCalls.push(filter)
+        const added = (filter.deny ?? []).filter((name) => !denied.has(name))
+        for (const name of added) denied.add(name)
+        return () => { for (const name of added) denied.delete(name) }
+      },
+    },
     inject: (deps, callback) => {
       if (!deps.includes('skills')) throw new Error(`unexpected inject ${deps.join(',')}`)
       let lifted = false
@@ -120,20 +144,21 @@ function harness() {
     ctx: agentCtx,
   }
 
-  return { ctx, agent, listeners, calls, shadows, tool: () => tool }
+  return { ctx, agent, listeners, calls, shadows, restrictCalls, toolSchemas, tool: () => tool }
 }
 
 /** Let the stubbed inject fibers run their callbacks. */
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 test('skill discovery reads through the agent scope, and preset skills are gated', { skip }, async () => {
-  const { ctx, agent, listeners, calls, shadows, tool } = harness()
+  const { ctx, agent, listeners, calls, shadows, restrictCalls, toolSchemas, tool } = harness()
   const dispose = await apply(ctx, {
     defaultOn: [],
     defaultOff: [],
     officialServers: [],
     defaultOnSkills: [],
     defaultOffSkills: [],
+    defaultOffTools: [],
     allowAgentToggle: true,
   })
 
@@ -198,6 +223,52 @@ test('skill discovery reads through the agent scope, and preset skills are gated
       afterRefresh.skills.filter((entry) => entry.enabled).map((entry) => entry.name),
       ['bundled-one'],
     )
+
+    /* ---- built-in tools ---- *
+     * Gateable tools are listed with a schema-cost estimate; MCP tools and the
+     * PTC entry point never appear in that list. */
+    const withTools = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
+    assert.deepEqual(withTools.tools.map((entry) => entry.name), ['bash', 'read'])
+    for (const entry of withTools.tools) {
+      assert.equal(entry.enabled, true, 'built-in tools start enabled')
+      assert.ok(entry.tokens > 0, 'a tool row carries its schema cost')
+      assert.match(entry.detail, /^~\d+ tok$/)
+    }
+    assert.ok(!withTools.tools.some((entry) => entry.name === 'run_code'), 'protected tools are not listed')
+    assert.ok(!withTools.tools.some((entry) => entry.name.startsWith('mcp__')), 'MCP tools are gated via their server')
+
+    /* Disabling a tool re-applies the one restriction: the server's tools stay
+     * denied and the disabled built-in joins them. */
+    const toolOff = JSON.parse(await tool().execute(
+      { action: 'disable', kind: 'tool', target: 'read' }, { agent },
+    ))
+    assert.equal(toolOff.ok, true)
+    assert.deepEqual([...restrictCalls.at(-1).deny].sort(), ['mcp__demo__thing', 'read'])
+    assert.ok(!agent.ctx.tools.schemas().some((schema) => schema.name === 'read'), 'read left the model tool table')
+    const readOff = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
+    assert.equal(readOff.tools.find((entry) => entry.name === 'read').enabled, false)
+
+    const toolOn = JSON.parse(await tool().execute(
+      { action: 'enable', kind: 'tool', target: 'read' }, { agent },
+    ))
+    assert.equal(toolOn.ok, true)
+    assert.deepEqual([...restrictCalls.at(-1).deny], ['mcp__demo__thing'])
+    assert.ok(agent.ctx.tools.schemas().some((schema) => schema.name === 'read'), 'read returned to the tool table')
+
+    /* Protected entries cannot be gated at all. */
+    const protectedOff = JSON.parse(await tool().execute(
+      { action: 'disable', kind: 'tool', target: 'run_code' }, { agent },
+    ))
+    assert.equal(protectedOff.ok, false)
+    assert.match(protectedOff.reason, /protected/)
+
+    /* A tool registered after attach shows up on the next change, enabled. */
+    toolSchemas.push({ name: 'glob', description: 'find files', parameters: { type: 'object', properties: {} } })
+    await listeners.get('tools/change')()
+    const grown = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
+    const glob = grown.tools.find((entry) => entry.name === 'glob')
+    assert.ok(glob !== undefined, 'a late-registered tool is discovered')
+    assert.equal(glob.enabled, true)
   } finally {
     dispose()
   }

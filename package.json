@@ -1,8 +1,8 @@
 {
   "name": "dsh-context-control",
-  "version": "0.4.6",
+  "version": "0.5.0",
   "type": "module",
-  "description": "会话级 MCP/技能可见性门控：新会话默认精简（官方条目开、用户配置的关），对话中通过模型工具或输入框面板按需开启；开关状态按项目持久化，并自带在线升级检查与一键升级。",
+  "description": "会话级 MCP/技能/内置工具可见性门控：新会话默认精简（官方条目开、用户配置的关，工具默认全开），对话中通过模型工具或输入框面板按需开关，并按 schema 体积估算上下文成本；开关状态按项目持久化，并自带在线升级检查与一键升级。",
   "license": "MIT",
   "exports": {
     ".": "./index.js",
@@ -34,6 +34,8 @@
     "context-control",
     "mcp",
     "skill",
+    "tool",
+    "token-budget",
     "self-update"
   ],
   "engines": {

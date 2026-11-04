@@ -1,12 +1,12 @@
 /**
  * dsh-context-control — Client half.
  *
- * A compact panel in the composer dock: a pill showing how many MCP servers
- * and skills are enabled for the current session; expanded, one chip per
- * entry with its origin badge (official / user-configured) and on/off state,
- * grouped by kind. Toggling calls the Host service over the Typert Gateway
- * (`remote.contextControl`), the same operations the `context_control` agent
- * tool uses.
+ * A compact panel in the composer dock: a pill showing how many MCP servers,
+ * skills and built-in tools are enabled for the current session, plus the
+ * approximate schema cost; expanded, one chip per entry with its origin badge
+ * (official / user-configured) and on/off state, grouped by kind. Toggling
+ * calls the Host service over the Typert Gateway (`remote.contextControl`),
+ * the same operations the `context_control` agent tool uses.
  *
  * Each pill is session-scoped: the `conversation.input.left` slot hands it the
  * `sessionId` of the composer it sits in, so every composer on screen — the
@@ -33,32 +33,30 @@ window.__ModuleLoader__.load({
     const entrySchema = {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['mcp', 'skill'] },
+        kind: { type: 'string', enum: ['mcp', 'skill', 'tool'] },
         name: { type: 'string' },
         enabled: { type: 'boolean' },
         official: { type: 'boolean' },
         detail: { type: 'string' },
+        tokens: { type: 'number' },
       },
       required: ['kind', 'name', 'enabled', 'official', 'detail'],
       additionalProperties: false,
     };
+    const entryZod = (kind) => zod.object({
+      kind: zod.literal(kind),
+      name: zod.string(),
+      enabled: zod.boolean(),
+      official: zod.boolean(),
+      detail: zod.string(),
+      tokens: zod.number().optional(),
+    });
     const listResultSchema = () => zod.object({
       sessionId: zod.string(),
       cwd: zod.string(),
-      mcp: zod.array(zod.object({
-        kind: zod.literal('mcp'),
-        name: zod.string(),
-        enabled: zod.boolean(),
-        official: zod.boolean(),
-        detail: zod.string(),
-      })),
-      skills: zod.array(zod.object({
-        kind: zod.literal('skill'),
-        name: zod.string(),
-        enabled: zod.boolean(),
-        official: zod.boolean(),
-        detail: zod.string(),
-      })),
+      mcp: zod.array(entryZod('mcp')),
+      skills: zod.array(entryZod('skill')),
+      tools: zod.array(entryZod('tool')),
     });
     const setResultSchema = () => zod.object({
       ok: zod.boolean(),
@@ -84,7 +82,7 @@ window.__ModuleLoader__.load({
           namespace: 'contextControl',
           method: 'list',
           service: 'contextControl',
-          description: 'List this session\'s MCP servers and skills with origin and enabled state.',
+          description: 'List this session\'s MCP servers, skills and built-in tools with origin and enabled state.',
           invocation: { kind: 'direct' },
           parameters: [stringParam('session to read the gating state for')],
           result: {
@@ -99,8 +97,9 @@ window.__ModuleLoader__.load({
                 cwd: { type: 'string' },
                 mcp: { type: 'array', items: entrySchema },
                 skills: { type: 'array', items: entrySchema },
+                tools: { type: 'array', items: entrySchema },
               },
-              required: ['sessionId', 'cwd', 'mcp', 'skills'],
+              required: ['sessionId', 'cwd', 'mcp', 'skills', 'tools'],
               additionalProperties: false,
             },
           },
@@ -110,21 +109,21 @@ window.__ModuleLoader__.load({
           namespace: 'contextControl',
           method: 'set',
           service: 'contextControl',
-          description: 'Enable or disable one MCP server or skill for one session.',
+          description: 'Enable or disable one MCP server, skill or built-in tool for one session.',
           invocation: { kind: 'direct' },
           parameters: [
             stringParam('session to modify'),
             {
               name: 'kind',
-              description: 'entry kind: mcp or skill.',
+              description: 'entry kind: mcp, skill or tool.',
               source: 'json',
               wire: 'kind',
-              codec: { mode: 'strict', typeSymbol: 'dsh-context-control#kind', create: () => zod.enum(['mcp', 'skill']), jsonSchema: { type: 'string', enum: ['mcp', 'skill'] } },
-              strictCodec: { mode: 'strict', typeSymbol: 'dsh-context-control#kind', create: () => zod.enum(['mcp', 'skill']), jsonSchema: { type: 'string', enum: ['mcp', 'skill'] } },
+              codec: { mode: 'strict', typeSymbol: 'dsh-context-control#kind', create: () => zod.enum(['mcp', 'skill', 'tool']), jsonSchema: { type: 'string', enum: ['mcp', 'skill', 'tool'] } },
+              strictCodec: { mode: 'strict', typeSymbol: 'dsh-context-control#kind', create: () => zod.enum(['mcp', 'skill', 'tool']), jsonSchema: { type: 'string', enum: ['mcp', 'skill', 'tool'] } },
             },
             {
               name: 'target',
-              description: 'MCP server or skill name to toggle.',
+              description: 'MCP server, skill or tool name to toggle.',
               source: 'json',
               wire: 'target',
               codec: { mode: 'strict', typeSymbol: 'dsh-context-control#target', create: () => zod.string(), jsonSchema: { type: 'string' } },
@@ -165,12 +164,13 @@ window.__ModuleLoader__.load({
     const DICT = {
       zh: {
         panel: '上下文',
-        none: '无 MCP 服务器或技能',
+        none: '无 MCP 服务器、技能或工具',
         mcp: 'MCP',
         skill: 'Skill',
+        tool: '工具',
         official: '官方',
         custom: '自配',
-        hint: '点击开关本会话的 MCP 服务器与技能（下次请求生效，按项目记忆）',
+        hint: '点击开关本会话的 MCP 服务器、技能与内置工具（下次请求生效，按项目记忆）',
         on: '已启用：',
         busy: '…',
         checkUpdate: '检查更新',
@@ -198,12 +198,13 @@ window.__ModuleLoader__.load({
       },
       en: {
         panel: 'Context',
-        none: 'No MCP servers or skills',
+        none: 'No MCP servers, skills or tools',
         mcp: 'MCP',
         skill: 'Skill',
+        tool: 'Tools',
         official: 'official',
         custom: 'custom',
-        hint: 'Click to toggle this session\u2019s MCP servers and skills (effective on the next request, remembered per project)',
+        hint: 'Click to toggle this session\u2019s MCP servers, skills and built-in tools (effective on the next request, remembered per project)',
         on: 'Enabled: ',
         busy: '…',
         checkUpdate: 'Check for updates',
@@ -792,13 +793,28 @@ window.__ModuleLoader__.load({
         }
 
 
+        /** `~1.2k` — compact schema-cost formatting for the pill and group headers. */
+        function formatTokens(count) {
+          if (count < 1000) return String(count);
+          return `${(count / 1000).toFixed(1)}k`;
+        }
+
+        /** Schema chars/4 estimate summed over the enabled entries of one group. */
+        function enabledTokens(entries) {
+          let total = 0;
+          for (const entry of entries) {
+            if (entry.enabled) total += entry.tokens ?? 0;
+          }
+          return total;
+        }
+
         /* Tooltip for the collapsed pill: the usage hint plus what is on right
          * now, so the current surface is readable without opening the popover.
          * A pending update adds one line — the badge exists to be noticed from
          * the collapsed state, not only after a click. */
-        function pillTitle(servers, skills, data) {
+        function pillTitle(servers, skills, tools, data) {
           if (data === undefined) return t('hint');
-          const on = [...servers, ...skills]
+          const on = [...servers, ...skills, ...tools]
             .filter((entry) => entry.enabled)
             .map((entry) => entry.name);
           return on.length === 0 ? t('hint') : `${t('hint')}\n${t('on')}${on.join('、')}`;
@@ -830,11 +846,15 @@ window.__ModuleLoader__.load({
           const anchorRef = useRef(null);
           const servers = snapshot.data?.mcp ?? [];
           const skills = snapshot.data?.skills ?? [];
+          const tools = snapshot.data?.tools ?? [];
           /* Mounted by whichever pill renders first; the store is shared, so
            * the other panes reuse the same answer instead of re-asking. */
           useEffect(() => { autoStartUpdateCheck() }, []);
-          if (snapshot.data !== undefined && servers.length === 0 && skills.length === 0) return null;
+          if (snapshot.data !== undefined && servers.length === 0 && skills.length === 0 && tools.length === 0) return null;
           const enabledOf = (entries) => entries.filter((entry) => entry.enabled).length;
+          const all = [...servers, ...skills, ...tools];
+          const onTokens = enabledTokens(all);
+          const countLabel = `${t('panel')}${snapshot.data === undefined ? '' : ` ${enabledOf(all)}/${all.length}${onTokens > 0 ? ` · ~${formatTokens(onTokens)} tok` : ''}`}${snapshot.busy ? t('busy') : ''}`;
           const close = (restoreFocus) => {
             setOpen(false);
             if (!restoreFocus) return;
@@ -842,8 +862,8 @@ window.__ModuleLoader__.load({
             if (pill !== null && pill !== undefined && typeof pill.focus === 'function') pill.focus();
           };
           const title = update.phase === 'available'
-            ? `${pillTitle(servers, skills, snapshot.data)}\n${t('updateAvailableTip')} v${update.info?.latest ?? '?'}`
-            : pillTitle(servers, skills, snapshot.data);
+            ? `${pillTitle(servers, skills, tools, snapshot.data)}\n${t('updateAvailableTip')} v${update.info?.latest ?? '?'}`
+            : pillTitle(servers, skills, tools, snapshot.data);
           return h('span', { ref: anchorRef, style: CSS.anchor, 'data-context-control': 'anchor' },
             h('button', {
               type: 'button',
@@ -862,7 +882,7 @@ window.__ModuleLoader__.load({
                 event.currentTarget.style.background = 'transparent';
               },
             },
-              `${t('panel')}${snapshot.data === undefined ? '' : ` ${enabledOf(servers)}/${servers.length}·${enabledOf(skills)}/${skills.length}`}${snapshot.busy ? t('busy') : ''}`,
+              countLabel,
               update.phase === 'available'
                 ? h('span', { key: '__update', style: CSS.updateDot, 'data-context-control': 'update-dot' }, '↑')
                 : null,
@@ -959,6 +979,7 @@ window.__ModuleLoader__.load({
           if (pos === undefined) return null;
           const servers = snapshot.data?.mcp ?? [];
           const skills = snapshot.data?.skills ?? [];
+          const tools = snapshot.data?.tools ?? [];
           let rowIndex = 0;
           rowRefs.current = [];
           const row = (entry) => {
@@ -994,11 +1015,20 @@ window.__ModuleLoader__.load({
               },
             },
               h('span', { style: CSS.menuRowMain },
-                h('span', { style: CSS.badge }, entry.official ? t('official') : t('custom')),
+                entry.kind === 'tool' ? null : h('span', { style: CSS.badge }, entry.official ? t('official') : t('custom')),
                 h('span', { style: CSS.menuName }, entry.name),
               ),
               h('span', { style: CSS.stateMark }, entry.enabled ? '●' : '○'),
             );
+          };
+
+          /* One header per group: on/total plus the schema cost of the entries
+           * that are currently on — that number is the reason to gate tools. */
+          const groupHeader = (key, label, entries) => {
+            const on = entries.filter((entry) => entry.enabled).length;
+            const tokens = enabledTokens(entries);
+            const cost = tokens > 0 ? ` · ~${formatTokens(tokens)} tok` : '';
+            return h('div', { key: `group:${key}`, style: CSS.menuGroup }, `${label} · ${on}/${entries.length}${cost}`);
           };
 
           return createPortal(h('div', {
@@ -1010,10 +1040,12 @@ window.__ModuleLoader__.load({
             'data-context-control-session': sessionId,
             style: { ...CSS.menu, left: pos.left, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight },
           },
-            servers.length > 0 ? h('div', { key: '__mcp', style: CSS.menuGroup }, t('mcp')) : null,
+            servers.length > 0 ? groupHeader('mcp', t('mcp'), servers) : null,
             servers.map(row),
-            skills.length > 0 ? h('div', { key: '__skill', style: CSS.menuGroup }, t('skill')) : null,
+            skills.length > 0 ? groupHeader('skill', t('skill'), skills) : null,
             skills.map(row),
+            tools.length > 0 ? groupHeader('tool', t('tool'), tools) : null,
+            tools.map(row),
             snapshot.error !== undefined ? h('div', { style: CSS.error }, snapshot.error) : null,
             h(UpdateFooter, { key: '__update' }),
             h('div', { style: CSS.hint }, t('hint')),

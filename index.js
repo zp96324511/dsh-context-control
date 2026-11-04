@@ -1,20 +1,36 @@
 /**
  * dsh-context-control — Host half.
  *
- * Per-session visibility gating for MCP servers and skills, with durable
- * per-project state. New sessions start with a lean model surface: official
- * entries (config-declared MCP servers; bundled/runtime skills) stay enabled,
- * everything else starts gated off. Gated entries contribute no tool schemas,
- * no prompt sections, and no catalog lines until enabled for that session —
- * through the `context_control` agent tool (the model, on the user's request)
- * or the composer panel (Client half, over the Typert Gateway as
+ * Per-session visibility gating for MCP servers, skills and built-in tools,
+ * with durable per-project state. New sessions start with a lean model
+ * surface: official entries (config-declared MCP servers; bundled/runtime
+ * skills; the Harness's own tools) stay enabled, everything else starts gated
+ * off. Gated entries contribute no tool schemas, no prompt sections, and no
+ * catalog lines until enabled for that session — through the
+ * `context_control` agent tool (the model, on the user's request) or the
+ * composer panel (Client half, over the Typert Gateway as
  * `remote.contextControl`).
+ *
+ * Every visible tool costs context on every request (its schema, and for many
+ * tools a `tool:<name>` guidance section), so the built-in tool set is a
+ * first-class gating dimension too. Unlike MCP servers and user skills, tools
+ * start enabled: disabling `read`, `bash` or `edit` by default would leave the
+ * model unable to work. `defaultOffTools` opts specific tools out for new
+ * projects; the panel and the tool both toggle them per session.
  *
  * Mechanism, per Harness plugin practices:
  * - MCP tool schemas: one per-agent `tools.restrict({ deny })` applied through
  *   `agent.ctx` (schema presentation, lookup, and execution stay aligned).
  *   Re-applied whenever the global tool inventory changes, so asynchronously
  *   registering MCP tools are caught by the `tools/change` listener.
+ * - Built-in tool schemas: the same `tools.restrict` filter carries disabled
+ *   tool names. Three names are never gateable: `run_code` (PTC's entry
+ *   point, which the runtime refuses to restrict), this plugin's own
+ *   `context_control`, and `structured_output` (the structured subagent
+ *   contract). The tool schema is only half the cost: many tools also
+ *   contribute a `tool:<name>` system-prompt section, which `restrict` does
+ *   not remove, so the assembly waterfall drops those sections for disabled
+ *   tools as well.
  * - MCP prompt sections: the `system-prompt/assemble` waterfall removes the
  *   gated servers' `mcp:<server>` instruction sections and rewrites the
  *   `mcp-resource-servers` list to the enabled subset. Sections have no
@@ -72,6 +88,13 @@ export const Config = z.object({
   defaultOnSkills: z.array(z.string()).default([]),
   /** Skill names disabled by default (overrides the source-based rule). */
   defaultOffSkills: z.array(z.string()).default([]),
+  /**
+   * Built-in tool names disabled by default for new projects. Every other
+   * tool starts enabled: a default-off `read` or `bash` would break a fresh
+   * session. Use this to trim optional context cost (e.g. `workflow`,
+   * `subagent`, `web_search`). Per-session toggles override it.
+   */
+  defaultOffTools: z.array(z.string()).default([]),
   /** Whether the model may enable/disable entries through the context_control tool. */
   allowAgentToggle: z.boolean().default(true),
   /**
@@ -111,7 +134,7 @@ export const Config = z.object({
   }).default({}),
 }).default({
   defaultOn: [], defaultOff: [], officialServers: [],
-  defaultOnSkills: [], defaultOffSkills: [],
+  defaultOnSkills: [], defaultOffSkills: [], defaultOffTools: [],
   allowAgentToggle: true, update: {},
 })
 
@@ -123,6 +146,14 @@ const MCP_TOOL_NAME = /^mcp__([A-Za-z0-9_-]{1,32})__/
 const RESOURCE_TOOL_NAMES = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'])
 /** Section listing resource server names; rewritten to the enabled subset. */
 const RESOURCE_SECTION_NAME = 'mcp-resource-servers'
+/**
+ * Tools that stay visible no matter what: `run_code` is PTC's entry point and
+ * the runtime refuses to restrict it, `context_control` is the model's only
+ * way back, and `structured_output` is the structured-subagent contract.
+ */
+const PROTECTED_TOOL_NAMES = new Set(['run_code', 'context_control', 'structured_output'])
+/** Guidance sections owned by one tool are named `tool:<toolName>`. */
+const TOOL_SECTION_PREFIX = 'tool:'
 /** Skill sources shipped with DSH itself: default on. Everything else defaults off. */
 const OFFICIAL_SKILL_SOURCES = new Set(['bundled', 'runtime'])
 /**
@@ -141,6 +172,8 @@ const PROJECT_DOMAIN = defineDomain({
     projects: domainTable(zod.object({
       mcp: zod.record(zod.string(), zod.boolean()),
       skills: zod.record(zod.string(), zod.boolean()),
+      /** Built-in tool overrides; absent in records written before 0.5.0. */
+      tools: zod.record(zod.string(), zod.boolean()).optional(),
     })),
   },
 })
@@ -202,6 +235,8 @@ export async function apply(ctx, config) {
   const scopedSeen = new Set()
   /** Names visible in the last global scan; the restrict fallback subset. */
   let globalSeen = new Set()
+  /** toolName -> JSON size in characters, for the panel's context-cost hint. */
+  const schemaCost = new Map()
   /** Re-entrancy guard: reconcile's own dispose/apply fire tools/change. */
   let reconciling = false
   /** Re-entrancy guard: shadow registration/disposal fires skills/change. */
@@ -232,8 +267,9 @@ export async function apply(ctx, config) {
     if (domain === null || entry.cwd === '') return
     const mcp = {}
     for (const server of inventory.keys()) mcp[server] = entry.mcp.has(server)
-    const record = { mcp, skills: {} }
+    const record = { mcp, skills: {}, tools: {} }
     for (const name of entry.knownSkills) record.skills[name] = entry.skills.has(name)
+    for (const name of entry.knownTools) record.tools[name] = entry.tools.has(name)
     domain.table('projects').put(entry.cwd, record).catch(
       (error) => warn(ctx, `persisting state failed: ${String(error)}`),
     )
@@ -241,10 +277,20 @@ export async function apply(ctx, config) {
 
   /* ---------- inventory scans ---------- */
 
+  /** Record one schema's JSON size, the raw material of the panel's cost hint. */
+  function rememberSchema(schema) {
+    try {
+      schemaCost.set(schema.name, JSON.stringify(schema).length)
+    } catch { /* a schema with a cycle is not worth failing over */ }
+  }
+
   /** Scan the global tool view (immune to per-agent restrictions). @returns whether the inventory changed. */
   function scanGlobal() {
     const seen = new Set()
-    for (const schema of ctx.tools.schemas()) seen.add(schema.name)
+    for (const schema of ctx.tools.schemas()) {
+      seen.add(schema.name)
+      rememberSchema(schema)
+    }
     let changed = false
     for (const name of seen) {
       const match = MCP_TOOL_NAME.exec(name)
@@ -291,6 +337,7 @@ export async function apply(ctx, config) {
     let changed = false
     try {
       for (const schema of agent.ctx.tools.schemas()) {
+        rememberSchema(schema)
         const match = MCP_TOOL_NAME.exec(schema.name)
         if (match !== null) {
           scopedSeen.add(schema.name)
@@ -315,6 +362,43 @@ export async function apply(ctx, config) {
       warn(ctx, `agent tool scan failed: ${String(error)}`)
     }
     return changed
+  }
+
+  /**
+   * Built-in tools this agent can see, minus the MCP names (grouped by server
+   * elsewhere), the shared resource tools, and the protected ones. Reads the
+   * agent's unrestricted view, so call it while this plugin's own restriction
+   * is lifted.
+   * @param scopeCtx - an agent context, or the plugin context for the global view.
+   */
+  function builtinToolInventory(scopeCtx) {
+    const known = new Set()
+    let schemas
+    try {
+      schemas = scopeCtx.tools.schemas()
+    } catch (error) {
+      warn(ctx, `built-in tool scan failed: ${String(error)}`)
+      return known
+    }
+    for (const schema of schemas) {
+      const toolName = schema.name
+      if (typeof toolName !== 'string' || toolName === '') continue
+      if (MCP_TOOL_NAME.test(toolName)) continue
+      if (RESOURCE_TOOL_NAMES.has(toolName) || PROTECTED_TOOL_NAMES.has(toolName)) continue
+      known.add(toolName)
+      rememberSchema(schema)
+    }
+    return known
+  }
+
+  /** Visible tool names in one agent's current (possibly restricted) view. */
+  function visibleToolNames(agent) {
+    try {
+      return new Set(agent.ctx.tools.schemas().map((schema) => schema.name))
+    } catch (error) {
+      warn(ctx, `reading the agent tool view failed: ${String(error)}`)
+      return new Set()
+    }
   }
 
   /**
@@ -376,42 +460,94 @@ export async function apply(ctx, config) {
     return enabled
   }
 
-  /** Tool names to deny for one enabled set: gated servers' tools, plus resource tools while no server is enabled. */
-  function denyFor(enabled) {
+  /**
+   * Default enabled tool set for a fresh project. Tools start enabled — a
+   * session without `read`/`bash` cannot work — and `defaultOffTools` opts
+   * individual optional tools out (scoped by tool name, not by origin, since
+   * the Harness exposes no per-tool source).
+   */
+  function defaultsForTools(known) {
+    const c = cfg()
+    const enabled = new Set()
+    for (const name of known) {
+      if (!c.defaultOffTools.includes(name)) enabled.add(name)
+    }
+    return enabled
+  }
+
+  /** Tool names to deny for one entry: gated servers' tools, shared resource tools, disabled built-ins. */
+  function denyFor(entry) {
     const deny = new Set()
     let anyEnabled = false
     for (const [server, tools] of inventory) {
-      if (enabled.has(server)) {
+      if (entry.mcp.has(server)) {
         anyEnabled = true
         continue
       }
       for (const name of tools) deny.add(name)
     }
     if (!anyEnabled) for (const name of resourceTools) deny.add(name)
+    for (const name of entry.knownTools) {
+      if (!entry.tools.has(name)) deny.add(name)
+    }
     return deny
   }
 
   /* ---------- per-agent reconciliation ---------- */
 
-  /** Lift and re-apply one agent's MCP restriction for its current enabled set. */
-  function reconcileMcp(entry) {
+  /** Lift one agent's restriction (its own dispose/apply fires tools/change, hence the guard). */
+  function liftRestriction(entry) {
+    if (entry.disposer === undefined) return
+    const lift = entry.disposer
+    entry.disposer = undefined
+    try { lift() } catch (error) { warn(ctx, `lifting restriction failed: ${String(error)}`) }
+  }
+
+  /**
+   * Re-scan the unrestricted built-in view: add tools that appeared (enabled
+   * unless `defaultOffTools`), drop ones that vanished. Called while the
+   * restriction is lifted, so nothing this plugin hides is mistaken for gone.
+   */
+  function refreshBuiltinTools(entry) {
+    const known = builtinToolInventory(entry.agent.ctx)
+    for (const name of known) {
+      if (entry.knownTools.has(name)) continue
+      entry.knownTools.add(name)
+      if (!cfg().defaultOffTools.includes(name)) entry.tools.add(name)
+    }
+    for (const name of [...entry.knownTools]) {
+      if (known.has(name)) continue
+      entry.knownTools.delete(name)
+      entry.tools.delete(name)
+    }
+  }
+
+  /**
+   * Lift and re-apply one agent's tool restriction for its current sets: MCP
+   * servers and built-in tools share one `restrict` call, so the agent's view
+   * is computed once per change. `rescan` refreshes the built-in inventory
+   * first (used from `tools/change`); a set operation already knows it.
+   */
+  function reconcile(entry, rescan = false) {
     reconciling = true
     try {
-      if (entry.disposer !== undefined) {
-        const lift = entry.disposer
-        entry.disposer = undefined
-        try { lift() } catch (error) { warn(ctx, `lifting restriction failed: ${String(error)}`) }
-      }
-      const deny = denyFor(entry.mcp)
-      entry.deny = deny
+      liftRestriction(entry)
+      if (rescan) refreshBuiltinTools(entry)
+      const deny = denyFor(entry)
       if (deny.size === 0) return
+      /* After the lift the full view is visible again. Filter to names this
+       * agent can actually see: a name hidden by another restriction is
+       * already off, and `restrict` rejects names outside the inherited set. */
+      const visible = visibleToolNames(entry.agent)
+      const candidate = [...deny].filter((name) => visible.has(name))
+      if (candidate.length === 0) return
       try {
-        entry.disposer = entry.agent.ctx.tools.restrict({ deny: [...deny] })
+        entry.disposer = entry.agent.ctx.tools.restrict({ deny: candidate })
       } catch (error) {
-        /* Stale names (a server vanished mid-run) fail restrict's validation;
+        /* Stale names (a tool vanished mid-run) fail restrict's validation;
          * retry with the global-view subset, which every agent inherits. */
-        const fallback = [...deny].filter((name) => globalSeen.has(name))
-        if (fallback.length > 0 && fallback.length < deny.size) {
+        const fallback = candidate.filter((name) => globalSeen.has(name))
+        if (fallback.length > 0 && fallback.length < candidate.length) {
           try {
             entry.disposer = entry.agent.ctx.tools.restrict({ deny: fallback })
           } catch (retryError) {
@@ -506,8 +642,8 @@ export async function apply(ctx, config) {
     reconcileSkills(entry)
   }
 
-  /** Attach gating state to one agent: init from the project record, apply MCP restriction and skill shadows.
-   * MCP gating lands synchronously before the first await, so a new agent's first assembly cannot slip past it;
+  /** Attach gating state to one agent: init from the project record, apply the tool restriction and skill shadows.
+   * Tool gating lands synchronously before the first await, so a new agent's first assembly cannot slip past it;
    * skill shadows follow discovery. The agent/created listener awaits this whole call. */
   async function attach(agent) {
     if (sessions.has(agent.id)) return
@@ -522,15 +658,25 @@ export async function apply(ctx, config) {
         else mcp.delete(server)
       }
     }
+    /* Read the built-in view before this plugin's own restriction exists. */
+    const knownTools = builtinToolInventory(agent.ctx)
+    const tools = defaultsForTools(knownTools)
+    if (stored !== undefined) {
+      for (const [name, on] of Object.entries(stored.tools ?? {})) {
+        if (!knownTools.has(name)) continue
+        if (on) tools.add(name)
+        else tools.delete(name)
+      }
+    }
     const entry = {
       agent, cwd,
-      mcp, skills: new Set(), knownSkills: new Set(), sources: new Map(),
-      deny: new Set(),
+      mcp, tools, knownTools,
+      skills: new Set(), knownSkills: new Set(), sources: new Map(),
       disposer: undefined,
       skillShadows: new Map(),
     }
     sessions.set(agent.id, entry)
-    reconcileMcp(entry)
+    reconcile(entry)
     const known = await skillInventory(cwd, agent)
     const skills = defaultsForSkills(known)
     if (stored !== undefined) {
@@ -554,12 +700,13 @@ export async function apply(ctx, config) {
     sessions.delete(agent.id)
   })
 
-  /* Catch asynchronously registering MCP tools and vanished ones. */
+  /* Catch asynchronously registering tools, vanished ones, and new built-ins.
+   * The restriction's own dispose/apply fires this event; `reconciling` keeps
+   * that from recursing. */
   const offToolsChange = ctx.on('tools/change', () => {
     if (reconciling) return
-    if (scanGlobal()) {
-      for (const entry of sessions.values()) reconcileMcp(entry)
-    }
+    scanGlobal()
+    for (const entry of sessions.values()) reconcile(entry, true)
   })
 
   /* Catch skill catalog changes (new or removed skills) for every live agent. */
@@ -568,16 +715,25 @@ export async function apply(ctx, config) {
     for (const entry of sessions.values()) void refreshSkills(entry)
   })
 
-  /* Remove gated servers' prompt sections; keep every other contribution. */
+  /* Remove gated servers' and disabled tools' prompt sections; keep every other
+   * contribution. `tools.restrict` hides a tool's schema but not the static
+   * `tool:<name>` guidance section some tool plugins register (the web tools
+   * self-check, most do not), so both costs are dropped here. */
   const offAssemble = ctx.on('system-prompt/assemble', (assembly, context, next) => {
     const agent = context.agent
     const entry = agent === undefined ? undefined : sessions.get(agent.id)
     if (entry === undefined) return next()
     const enabled = entry.mcp
-    if (assembly.sections.some((section) => section.name.startsWith('mcp:'))) {
-      assembly.sections = assembly.sections.filter(
-        (section) => !section.name.startsWith('mcp:') || enabled.has(section.name.slice(4)),
-      )
+    const disabledSections = new Set()
+    for (const name of entry.knownTools) {
+      if (!entry.tools.has(name)) disabledSections.add(TOOL_SECTION_PREFIX + name)
+    }
+    const hasMcpSections = assembly.sections.some((section) => section.name.startsWith('mcp:'))
+    if (hasMcpSections || disabledSections.size > 0) {
+      assembly.sections = assembly.sections.filter((section) => {
+        if (section.name.startsWith('mcp:')) return enabled.has(section.name.slice(4))
+        return !disabledSections.has(section.name)
+      })
     }
     const index = assembly.sections.findIndex((section) => section.name === RESOURCE_SECTION_NAME)
     if (index !== -1) {
@@ -595,6 +751,19 @@ export async function apply(ctx, config) {
 
   /* ---------- shared operations (agent tool + Client remote) ---------- */
 
+  /** Rough token count of a set of tool schemas (~4 JSON chars per token). */
+  function tokensFor(names) {
+    let chars = 0
+    for (const name of names) chars += schemaCost.get(name) ?? 0
+    return chars === 0 ? 0 : Math.max(1, Math.round(chars / 4))
+  }
+
+  /** Panel detail for one tool or server: `~N tok`, or '' when no schema is known. */
+  function costDetail(names) {
+    const tokens = tokensFor(names)
+    return tokens === 0 ? '' : `~${tokens} tok`
+  }
+
   const ops = {
     async list(sessionId) {
       scanGlobal()
@@ -604,13 +773,18 @@ export async function apply(ctx, config) {
       const mcpEnabled = entry !== undefined ? entry.mcp : mcpEnabledForStored(sessionId, cwd)
       const known = await skillInventory(cwd, entry?.agent)
       const skillsEnabled = entry !== undefined ? entry.skills : skillsEnabledForStored(cwd, known)
-      const servers = [...inventory.keys()].sort().map((server) => ({
-        kind: 'mcp',
-        name: server,
-        enabled: mcpEnabled.has(server),
-        official: c.officialServers.includes(server),
-        detail: `${inventory.get(server).size} tools`,
-      }))
+      const servers = [...inventory.keys()].sort().map((server) => {
+        const names = [...inventory.get(server)]
+        const cost = costDetail(names)
+        return {
+          kind: 'mcp',
+          name: server,
+          enabled: mcpEnabled.has(server),
+          official: c.officialServers.includes(server),
+          detail: `${names.length} tools${cost === '' ? '' : ` · ${cost}`}`,
+          tokens: tokensFor(names),
+        }
+      })
       const skills = [...known.keys()].sort().map((skillName) => {
         /* A gated skill is reported through its shadow; show the origin learned before gating. */
         const reported = known.get(skillName)
@@ -625,7 +799,17 @@ export async function apply(ctx, config) {
           detail: String(source),
         }
       })
-      return { sessionId, cwd, mcp: servers, skills }
+      const knownTools = entry !== undefined ? entry.knownTools : builtinToolInventory(ctx)
+      const toolsEnabled = entry !== undefined ? entry.tools : toolsEnabledForStored(cwd, knownTools)
+      const tools = [...knownTools].sort().map((toolName) => ({
+        kind: 'tool',
+        name: toolName,
+        enabled: toolsEnabled.has(toolName),
+        official: true,
+        detail: costDetail([toolName]),
+        tokens: tokensFor([toolName]),
+      }))
+      return { sessionId, cwd, mcp: servers, skills, tools }
     },
     async set(sessionId, kind, target, enabled) {
       const entry = sessions.get(sessionId)
@@ -639,7 +823,7 @@ export async function apply(ctx, config) {
         }
         if (enabled) entry.mcp.add(target)
         else entry.mcp.delete(target)
-        reconcileMcp(entry)
+        reconcile(entry)
       } else if (kind === 'skill') {
         if (!entry.knownSkills.has(target)) {
           return { ok: false, reason: `unknown skill "${target}"; call list first` }
@@ -647,8 +831,18 @@ export async function apply(ctx, config) {
         if (enabled) entry.skills.add(target)
         else entry.skills.delete(target)
         reconcileSkills(entry)
+      } else if (kind === 'tool') {
+        if (PROTECTED_TOOL_NAMES.has(target)) {
+          return { ok: false, reason: `"${target}" is protected and cannot be gated` }
+        }
+        if (!entry.knownTools.has(target)) {
+          return { ok: false, reason: `unknown tool "${target}"; call list first` }
+        }
+        if (enabled) entry.tools.add(target)
+        else entry.tools.delete(target)
+        reconcile(entry)
       } else {
-        return { ok: false, reason: `unknown kind "${kind}"; use mcp or skill` }
+        return { ok: false, reason: `unknown kind "${kind}"; use mcp, skill or tool` }
       }
       persist(entry)
       return { ok: true, kind, name: target, enabled, note: 'takes effect on the next model request' }
@@ -681,14 +875,29 @@ export async function apply(ctx, config) {
     return enabled
   }
 
+  /** Enabled tool set for a session with no live agent: stored record over defaults. */
+  function toolsEnabledForStored(cwd, known) {
+    const enabled = defaultsForTools(known)
+    const stored = storedFor(cwd)
+    if (stored !== undefined) {
+      for (const [name, on] of Object.entries(stored.tools ?? {})) {
+        if (!known.has(name)) continue
+        if (on) enabled.add(name)
+        else enabled.delete(name)
+      }
+    }
+    return enabled
+  }
+
   /* ---------- the model-facing control surface ---------- */
 
   const offTool = ctx.tools.register(defineTool({
     name: 'context_control',
     description:
-      'List this session\'s gated MCP servers and skills, or enable/disable one for this session only. '
-      + 'Gated entries contribute no tools, no prompt sections, and no catalog lines until enabled; changes take effect on the next model request. '
-      + 'Official entries start enabled; user-configured ones start disabled. Call list first for exact names. '
+      'List this session\'s gated MCP servers, skills and built-in tools, or enable/disable one for this session only. '
+      + 'Gated entries contribute no tool schemas, no prompt sections, and no catalog lines until enabled; changes take effect on the next model request. '
+      + 'Official entries start enabled; user-configured MCP servers and skills start disabled; built-in tools start enabled. '
+      + 'Protected tools (run_code, context_control, structured_output) cannot be gated. Call list first for exact names. '
       + 'The user can also toggle entries from the composer panel.',
     parameters: {
       action: {
@@ -699,12 +908,12 @@ export async function apply(ctx, config) {
       },
       kind: {
         type: 'string',
-        enum: ['mcp', 'skill'],
+        enum: ['mcp', 'skill', 'tool'],
         description: 'Toggle target kind; defaults to mcp.',
       },
       target: {
         type: 'string',
-        description: 'MCP server name or skill name from the list; required for enable and disable.',
+        description: 'MCP server, skill or built-in tool name from the list; required for enable and disable.',
       },
     },
     output: {

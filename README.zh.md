@@ -1,6 +1,6 @@
 # dsh-context-control
 
-会话级的 MCP / 技能可见性门控：新会话默认精简（官方条目开、用户自配的关），对话中通过 `context_control` 工具或输入框左侧的「上下文」胶囊按需开启；开关状态按项目持久化。**自带在线安装与升级通道**：能从它被安装的那个渠道查新版本，并在面板里一键升级、自动重启。
+会话级的 MCP / 技能 / 内置工具可见性门控：新会话默认精简（官方条目开、用户自配的关），对话中通过 `context_control` 工具或输入框左侧的「上下文」胶囊按需开关；每个条目的 schema 体积按 `字符数 / 4` 估算成 token，面板直接显示「开着的这些东西一共占多少上下文」。开关状态按项目持久化。**自带在线安装与升级通道**：能从它被安装的那个渠道查新版本，并在面板里一键升级、自动重启。
 
 [English](README.md) | 中文
 
@@ -151,6 +151,15 @@ DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的
 
 如果某个技能在模型上下文里存在、面板里却没有，先确认它放在上面某个根里；再看宿主日志里有没有 `skill discovery failed`。
 
+### 门控覆盖哪些工具（成本怎么算）
+
+工具 schema 是工具表里最固定的开销：它们每个请求都要重发一遍。所以面板把每个**可门控的内置工具**单独列成一行，并显示估算成本 `ceil(JSON.stringify(schema).length / 4)`（即 4 字符 ≈ 1 token，只算 schema，不含描述性 system-prompt 段）。胶囊和分组标题会把已启用条目的成本加起来——`上下文 3/5 · ~2.6k tok`。
+
+- 关掉的工具从模型视图里移除（和 MCP 工具共用同一次 `tools.restrict`），并在 `system-prompt/assemble` 时删掉对应的 `tool:<名字>` 引导段；只 restrict 是不够的，那段文本不属于 schema。
+- 内置工具**默认全开**，这样升级不会改变现有行为；想默认关掉某几个，用 `defaultOffTools`（见下）。
+- `run_code`、`context_control`、`structured_output` 受保护，永远不出现在列表里，也不能被关——`context_control` 本身就是把门控打开的入口，关掉它等于把自己锁在门外。
+- MCP 工具不单独列出（它们跟着服务器开关走）；MCP 那一行的成本是该服务器所有工具 schema 之和。`list_mcp_resources` 等资源工具同样由服务器开关控制。
+
 在 `~/.dsh/profiles/web/cordis.patch.yml` 里：
 
 ```yaml
@@ -158,6 +167,7 @@ DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的
   name: dsh-context-control
   config:
     defaultOn: [hivemem]
+    defaultOffTools: []        # 例：[bash, chrome-main 之类]；内置工具默认全开
     update:
       # 可选：渠道由安装来源自动推导，下面几项用于覆盖
       manifestUrl: https://<你的站>/dsh-context-control/channel.json
@@ -200,7 +210,7 @@ mklink /J "C:\data\projects\dsh-context-control\node_modules" "C:\Users\<you>\Ap
 测试：
 
 ```pwsh
-npm run check        # 清单守卫 + node --check + 20 项宿主测试 + 28 项客户端离线回归
+npm run check        # 清单守卫 + node --check + 20 项升级测试 + 宿主门控回归 + 32 项客户端离线回归
 npm test             # 只跑两套测试
 ```
 

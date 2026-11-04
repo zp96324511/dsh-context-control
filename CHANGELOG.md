@@ -4,6 +4,30 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.5.0 — 2026-11-04
+
+- Built-in tools are now gated alongside MCP servers and skills. Tool schemas
+  are the largest fixed cost in the tool table (they are re-sent on every
+  request), so the panel lists every gateable tool with an estimated token
+  cost — `ceil(JSON.stringify(schema).length / 4)` — and the pill/group
+  headers sum the enabled rows (`~2.6k tok`). Disabled tools are removed from
+  the model's view with the same `tools.restrict` call that hides MCP tools,
+  and their `tool:<name>` system-prompt sections are dropped during
+  `system-prompt/assemble` (a restriction hides the schema but not the
+  section). Built-in tools start *enabled*, preserving existing behaviour;
+  `defaultOffTools` opts specific tools out per install, and project-scoped
+  choices persist like MCP/skill switches.
+- `run_code`, `context_control` and `structured_output` are protected: they
+  are the harness entry points themselves (hiding `context_control` would make
+  the gate unrecoverable from inside the conversation), so they never appear
+  in the list and a toggle request is refused with a reason.
+- MCP tool rows and resource tools are never listed as individual tools; they
+  still follow their server switch. MCP rows gained the same cost display,
+  summing the schemas of the tools that server contributes.
+- The `context_control` tool and the pane UI accept `kind: "tool"`, and the
+  client descriptors/`listResultSchema` carry the new `tools` array plus a
+  numeric `tokens` field per row.
+
 ## 0.4.6 — 2026-11-04
 
 - Fix: skill gating missed every skill that came from a filesystem root. The

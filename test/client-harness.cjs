@@ -236,11 +236,15 @@ const LIST = {
   sessionId: 's1',
   cwd: 'C:\\demo',
   mcp: [
-    { kind: 'mcp', name: 'hivemem', enabled: true, official: false, detail: '8 tools' },
-    { kind: 'mcp', name: 'chrome-main', enabled: false, official: false, detail: '32 tools' },
+    { kind: 'mcp', name: 'hivemem', enabled: true, official: false, detail: '8 tools · ~2.4k tok', tokens: 2400 },
+    { kind: 'mcp', name: 'chrome-main', enabled: false, official: false, detail: '32 tools · ~8.0k tok', tokens: 8000 },
   ],
   skills: [
-    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, official: true, detail: 'bundled' },
+    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, official: true, detail: 'bundled', tokens: 0 },
+  ],
+  tools: [
+    { kind: 'tool', name: 'read', enabled: true, official: true, detail: '~180 tok', tokens: 180 },
+    { kind: 'tool', name: 'bash', enabled: false, official: true, detail: '~300 tok', tokens: 300 },
   ],
 };
 
@@ -249,13 +253,14 @@ const LIST = {
 const LIST_S2 = {
   sessionId: 's2',
   cwd: 'C:\\demo2',
-  mcp: [{ kind: 'mcp', name: 'chrome-p2', enabled: false, official: false, detail: '5 tools' }],
-  skills: [{ kind: 'skill', name: 'office', enabled: true, official: false, detail: 'user' }],
+  mcp: [{ kind: 'mcp', name: 'chrome-p2', enabled: false, official: false, detail: '5 tools · ~1.0k tok', tokens: 1000 }],
+  skills: [{ kind: 'skill', name: 'office', enabled: true, official: false, detail: 'user', tokens: 0 }],
+  tools: [],
 };
 
 const DICT_ZH = {
-  panel: '上下文', none: '无', mcp: 'MCP', skill: 'Skill', official: '官方', custom: '自配',
-  hint: '点击开关本会话的 MCP 服务器与技能（下次请求生效，按项目记忆）', on: '已启用：', busy: '…',
+  panel: '上下文', none: '无', mcp: 'MCP', skill: 'Skill', tool: '工具', official: '官方', custom: '自配',
+  hint: '点击开关本会话的 MCP 服务器、技能与内置工具（下次请求生效，按项目记忆）', on: '已启用：', busy: '…',
   checkUpdate: '检查更新', checking: '检查中…', upToDate: '已是最新', available: '可升级',
   upgrade: '一键升级', upgrading: '升级中…', upgraded: '已升级，需重启', restart: '重启服务',
   restarting: '重启中…', reload: '刷新页面', failed: '升级失败', retry: '重试', details: '详情',
@@ -430,11 +435,11 @@ const fakeCtx = {
     assert(remoteCalls.some((call) => call[0] === 'list' && call[1] === 's1'), JSON.stringify(remoteCalls));
   });
 
-  check('pill text shows enabled/total', () => {
+  check('pill text shows enabled/total and schema cost', () => {
     const button = find(tree, (element) => element.tag === 'button')[0];
     assert(button !== undefined, 'no pill button');
     const text = find(button, (element) => element.text !== undefined).map((element) => element.text).join('');
-    assert(text.includes('上下文 1/2·1/1'), `pill text is "${text}"`);
+    assert(text.includes('上下文 3/5 · ~2.6k tok'), `pill text is "${text}"`);
   });
 
   check('pill tooltip lists enabled entries', () => {
@@ -442,7 +447,9 @@ const fakeCtx = {
     assert(typeof button.props.title === 'string', 'no title');
     assert(button.props.title.includes('hivemem'), `title is "${button.props.title}"`);
     assert(button.props.title.includes('diagnose-windows-sandbox-acl'), `title is "${button.props.title}"`);
+    assert(button.props.title.includes('read'), `title is "${button.props.title}"`);
     assert(!button.props.title.includes('chrome-main'), `title leaks a disabled entry: "${button.props.title}"`);
+    assert(!button.props.title.includes('bash'), `title leaks a disabled entry: "${button.props.title}"`);
   });
 
   /* Open the popover through the pill's click handler. */
@@ -462,7 +469,15 @@ const fakeCtx = {
 
   const switches = find(tree, (element) => element.props?.['role'] === 'switch');
   check('popover renders one switch per entry', () => {
-    assert(switches.length === 3, `got ${switches.length} switch rows`);
+    assert(switches.length === 5, `got ${switches.length} switch rows`);
+  });
+
+  check('group headers carry on/total and cost', () => {
+    const menu = find(tree, (element) => element.props?.['data-context-control'] === 'menu')[0];
+    const labels = find(menu, (element) => element.text !== undefined).map((element) => element.text);
+    assert(labels.includes('MCP · 1/2 · ~2.4k tok'), `groups are ${JSON.stringify(labels)}`);
+    assert(labels.includes('Skill · 1/1'), `groups are ${JSON.stringify(labels)}`);
+    assert(labels.includes('工具 · 1/2 · ~180 tok'), `groups are ${JSON.stringify(labels)}`);
   });
 
   const menu = find(tree, (element) => element.props?.['data-context-control'] === 'menu')[0];
@@ -546,8 +561,8 @@ const fakeCtx = {
     const textOf = (anchor) => find(anchor, (element) => element.text !== undefined)
       .map((element) => element.text).join('');
     assert(remoteCalls.some((call) => call[0] === 'list' && call[1] === 's2'), JSON.stringify(remoteCalls));
-    assert(textOf(anchors[0]).includes('上下文 1/2·1/1'), `pane 1 text is "${textOf(anchors[0])}"`);
-    assert(textOf(anchors[1]).includes('上下文 0/1·1/1'), `pane 2 text is "${textOf(anchors[1])}"`);
+    assert(textOf(anchors[0]).includes('上下文 3/5 · ~2.6k tok'), `pane 1 text is "${textOf(anchors[0])}"`);
+    assert(textOf(anchors[1]).includes('上下文 1/2'), `pane 2 text is "${textOf(anchors[1])}"`);
   });
 
   anchorsOf(panesTree)[0].children[0].props.onClick();
@@ -675,7 +690,7 @@ const fakeCtx = {
   check('a pending update badges the pill without changing its text', () => {
     const badge = find(updateTree, (element) => element.props?.['data-context-control-update'] === 'available')[0];
     assert(badge !== undefined, 'no update badge on the pill');
-    assert(textOf(badge).includes('上下文 1/2·1/1'), `pill text changed: "${textOf(badge)}"`);
+    assert(textOf(badge).includes('上下文 3/5 · ~2.6k tok'), `pill text changed: "${textOf(badge)}"`);
     assert(textOf(badge).includes('↑'), 'the badge marker is missing');
     assert(badge.props.title.includes('有新版本'), 'the tooltip does not mention the update');
   });
