@@ -9,10 +9,26 @@
  * bundled/host-registered skills while the model's catalog (which passes
  * `scope: agent`) showed everything — user skills stayed on in the prompt and
  * were impossible to toggle.
+ *
+ * The host half imports the Harness packages, which a bare checkout (CI) does
+ * not have, so the suite skips there instead of failing on module resolution;
+ * it runs wherever the plugin is actually developed, i.e. next to an install.
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { apply } from '../index.js'
+
+let apply
+let unavailable = false
+try {
+  ;({ apply } = await import('../index.js'))
+} catch (error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error
+  unavailable = true
+}
+
+const skip = unavailable
+  ? 'needs the Harness packages (@deepseek-ai/dsh-*), which a bare checkout does not install'
+  : false
 
 const SHADOW_SOURCE = 'context-control-gated'
 
@@ -110,7 +126,7 @@ function harness() {
 /** Let the stubbed inject fibers run their callbacks. */
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-test('skill discovery reads through the agent scope, and preset skills are gated', async () => {
+test('skill discovery reads through the agent scope, and preset skills are gated', { skip }, async () => {
   const { ctx, agent, listeners, calls, shadows, tool } = harness()
   const dispose = await apply(ctx, {
     defaultOn: [],
