@@ -123,6 +123,26 @@ The `Publish` workflow runs on the tag: it checks `tag == version`, runs `npm ru
 
 ## Configuration
 
+### Which skill roots are gated
+
+DSH skills are layered: `bundled` skills shipped with DSH and host-registered
+`runtime` skills live in the global layer, everything else comes from the
+filesystem provider mounted inside the agent preset. This plugin reads the
+catalog from **the current session's agent**, so skills in every root below
+show up in the panel and can be toggled (off by default):
+
+| Root | `source` |
+|---|---|
+| DSH's bundled skill directory | `bundled` (on by default) |
+| `<project>/.dsh/skills` | `project-dsh` |
+| `<project>/.agents/skills` | `project-agents` |
+| `~/.dsh/skills` | `user-dsh` |
+| `~/.agents/skills` | `user-agents` |
+| `customSkillDirs` from the preset | `custom` |
+
+If a skill is in the model's catalog but not in the panel, check that it lives
+in one of those roots, then look for `skill discovery failed` in the host log.
+
 In `~/.dsh/profiles/web/cordis.patch.yml`:
 
 ```yaml

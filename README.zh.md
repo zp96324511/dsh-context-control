@@ -136,6 +136,21 @@ git push origin v0.4.5
 
 ## 配置
 
+### 门控覆盖哪些技能根
+
+DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的 `runtime` 技能在全局层，其余由 agent 预设里的文件系统 provider 提供。本插件按**当前会话的 agent 视角**读取，所以下列根里的技能都会出现在面板里、都能开关（默认关）：
+
+| 根 | `source` |
+|---|---|
+| `<DSH 内置技能目录>` | `bundled`（默认开） |
+| `<项目根>/.dsh/skills` | `project-dsh` |
+| `<项目根>/.agents/skills` | `project-agents` |
+| `~/.dsh/skills` | `user-dsh` |
+| `~/.agents/skills` | `user-agents` |
+| 预设里配置的 `customSkillDirs` | `custom` |
+
+如果某个技能在模型上下文里存在、面板里却没有，先确认它放在上面某个根里；再看宿主日志里有没有 `skill discovery failed`。
+
 在 `~/.dsh/profiles/web/cordis.patch.yml` 里：
 
 ```yaml

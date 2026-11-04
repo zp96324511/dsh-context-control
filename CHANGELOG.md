@@ -4,6 +4,35 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.4.6 — 2026-11-04
+
+- Fix: skill gating missed every skill that came from a filesystem root. The
+  plugin read `ctx.skills.list({ cwd })` without `scope`, and the skill registry
+  merges only the global layer for an unscoped read — so `~/.agents/skills`,
+  `~/.dsh/skills`, `<project>/.dsh/skills`, `<project>/.agents/skills` and
+  `customSkillDirs`, all contributed by the agent preset's filesystem provider,
+  were invisible. Those skills still reached the model's catalog (the `skill`
+  tool passes `scope: agent`), stayed on in the prompt, and could not be
+  toggled from the panel or `context_control` — while `list` reported only
+  bundled skills. Discovery, refresh and the `list` operation now read through
+  the viewing agent's scope, exactly like the catalog does.
+- Gating shadows now carry their own `source` (`context-control-gated`) instead
+  of `runtime`, so a shadowed user skill is not misreported as an official
+  runtime skill; the panel keeps showing the origin learned before gating.
+- Fix: skill shadows were registered as `agent.ctx.skills.register(...)`, but an
+  agent context only reaches the services its loop declared (`tools`,
+  `systemPrompt`, …), so that property access threw `cannot get property
+  "skills" without inject` — the shadow was never installed, the failure only
+  reached the log, and disabling a skill in the panel changed nothing in the
+  model's catalog. Shadows are now registered from an injected child fiber of
+  the agent context (`agent.ctx.inject(['skills'], …)`), which both reaches the
+  service and owns the registration's lifetime: disposing the fiber lifts the
+  shadow, and the entry still lands in the agent's own layer.
+- Tests: a host-side regression test drives `apply` with a stub context whose
+  scoped and unscoped reads differ and whose agent context refuses direct
+  `skills` access, pinning discovery, toggling, shadow bookkeeping and the
+  reported origin.
+
 ## 0.4.5 — 2026-11-04
 
 - Fix: a 404 from the update routes (the new client bundle is served from disk

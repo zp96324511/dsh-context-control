@@ -20,12 +20,19 @@
  *   `mcp-resource-servers` list to the enabled subset. Sections have no
  *   weaker per-scope removal mechanism; the mutation is surgical (only those
  *   two names) and every other contribution is preserved.
- * - Skills: a per-agent scoped shadow registration (`agent.ctx.skills.register`)
- *   with `invocation: { modelInvocable: false, userInvocable: false }`. The
+ * - Skills: a per-agent scoped shadow registration — an injected child fiber of
+ *   `agent.ctx` (`agent.ctx.inject(['skills'], …)`, since an agent context only
+ *   reaches the services its loop declared) calling `skills.register` with
+ *   `invocation: { modelInvocable: false, userInvocable: false }`. The
  *   skills registry's nearest-layer-wins rule shadows the real entry for that
  *   agent, and the invocation policy removes it from the catalog, the `skill`
  *   tool, and user invocation at once — the designed mechanism, no message
- *   rewriting. Enabling disposes the shadow.
+ *   rewriting. Disposing the fiber lifts the shadow. Discovery must read the
+ *   catalog through the same `scope` the catalog and the `skill` tool use:
+ *   project, user (`~/.dsh/skills`, `~/.agents/skills`) and custom roots are
+ *   contributed by the filesystem provider mounted inside the agent preset, so
+ *   an unscoped read sees only the global layer (bundled and host-registered
+ *   skills).
  * - Both take effect on the next model request: the agent loop detects the
  *   changed tool surface and starts a new request series.
  *
@@ -118,6 +125,12 @@ const RESOURCE_TOOL_NAMES = new Set(['list_mcp_resources', 'list_mcp_resource_te
 const RESOURCE_SECTION_NAME = 'mcp-resource-servers'
 /** Skill sources shipped with DSH itself: default on. Everything else defaults off. */
 const OFFICIAL_SKILL_SOURCES = new Set(['bundled', 'runtime'])
+/**
+ * Source label of this plugin's own gating shadows. The skills registry keeps a
+ * runtime registration's `source` verbatim, so the shadow is distinguishable
+ * from a real skill and never mistaken for a discovered origin.
+ */
+const SHADOW_SKILL_SOURCE = 'context-control-gated'
 
 /** Durable layout: one record per project cwd with the last chosen sets. */
 const PROJECT_DOMAIN = defineDomain({
@@ -304,10 +317,23 @@ export async function apply(ctx, config) {
     return changed
   }
 
-  /** Discover the skills visible for one project. @returns name -> source map. */
-  async function skillInventory(cwd) {
+  /**
+   * Discover the skills one agent can actually see. Skills are a layered
+   * registry: project, user and custom roots are contributed by the filesystem
+   * provider mounted inside the agent preset, so a read without `scope` sees
+   * only the global layer (bundled and host-registered skills) and every
+   * `~/.agents/skills`, `~/.dsh/skills`, `<project>/.agents/skills` entry stays
+   * invisible. Pass the viewing agent, exactly as the `skill` tool and the
+   * catalog do.
+   * @param cwd - project working directory; '' asks for the default view.
+   * @param agent - viewing agent whose scope chain contributes preset skills; omitted for the global view.
+   * @returns name -> source map; this plugin's own shadows report SHADOW_SKILL_SOURCE.
+   */
+  async function skillInventory(cwd, agent) {
     try {
-      const summaries = await ctx.skills.list(cwd === '' ? {} : { cwd })
+      const options = cwd === '' ? {} : { cwd }
+      if (agent !== undefined) options.scope = agent
+      const summaries = await ctx.skills.list(options)
       const known = new Map()
       for (const summary of summaries) known.set(summary.name, summary.source)
       return known
@@ -315,6 +341,15 @@ export async function apply(ctx, config) {
       warn(ctx, `skill discovery failed: ${String(error)}`)
       return new Map()
     }
+  }
+
+  /** Keep only real discovery origins from an inventory result (shadows carry no origin). */
+  function realSkillSources(known) {
+    const sources = new Map()
+    for (const [name, source] of known) {
+      if (source !== SHADOW_SKILL_SOURCE) sources.set(name, source)
+    }
+    return sources
   }
 
   /* ---------- defaults and deny computation ---------- */
@@ -391,19 +426,27 @@ export async function apply(ctx, config) {
     }
   }
 
-  /** Shadow one skill off for one agent: nearest layer wins, invocation policy hides it everywhere. */
+  /**
+   * Shadow one skill off for one agent: nearest layer wins, invocation policy
+   * hides it everywhere. The registration must go through an injected child
+   * fiber of the agent context: an agent context only reaches the services its
+   * loop declared (`tools`, `systemPrompt`, …), so reading `agent.ctx.skills`
+   * directly throws and every shadow would silently fail. The fiber is also the
+   * registration's owner — disposing it lifts the shadow — and registering from
+   * inside it files the entry in the agent's own layer, not the global one.
+   */
   function gateSkill(entry, skillName) {
     if (entry.skillShadows.has(skillName)) return
     shadowing = true
     try {
-      const dispose = entry.agent.ctx.skills.register({
+      const fiber = entry.agent.ctx.inject(['skills'], (scoped) => scoped.skills.register({
         name: skillName,
         description: 'Gated off for this session by dsh-context-control.',
-        source: 'runtime',
+        source: SHADOW_SKILL_SOURCE,
         content: 'This skill is gated off for this session. Enable it via the context_control tool or the composer panel.',
         invocation: { modelInvocable: false, userInvocable: false },
-      })
-      entry.skillShadows.set(skillName, dispose)
+      }))
+      entry.skillShadows.set(skillName, () => { void fiber.dispose() })
     } catch (error) {
       warn(ctx, `gating skill "${skillName}" failed: ${String(error)}`)
     } finally {
@@ -440,11 +483,12 @@ export async function apply(ctx, config) {
 
   /** Refresh one agent's skill knowledge (new skills default, vanished ones drop) and re-apply shadows. */
   async function refreshSkills(entry) {
-    const known = await skillInventory(entry.cwd)
-    for (const [name] of known) {
+    const known = await skillInventory(entry.cwd, entry.agent)
+    for (const [name, source] of known) {
+      /* A shadow masks the real origin; keep the one learned before gating. */
+      if (source !== SHADOW_SKILL_SOURCE) entry.sources.set(name, source)
       if (!entry.knownSkills.has(name)) {
         entry.knownSkills.add(name)
-        const source = known.get(name)
         const c = cfg()
         if (!c.defaultOffSkills.includes(name)
           && (c.defaultOnSkills.includes(name) || OFFICIAL_SKILL_SOURCES.has(source))) {
@@ -456,6 +500,7 @@ export async function apply(ctx, config) {
       if (!known.has(name)) {
         entry.knownSkills.delete(name)
         entry.skills.delete(name)
+        entry.sources.delete(name)
       }
     }
     reconcileSkills(entry)
@@ -479,14 +524,14 @@ export async function apply(ctx, config) {
     }
     const entry = {
       agent, cwd,
-      mcp, skills: new Set(), knownSkills: new Set(),
+      mcp, skills: new Set(), knownSkills: new Set(), sources: new Map(),
       deny: new Set(),
       disposer: undefined,
       skillShadows: new Map(),
     }
     sessions.set(agent.id, entry)
     reconcileMcp(entry)
-    const known = await skillInventory(cwd)
+    const known = await skillInventory(cwd, agent)
     const skills = defaultsForSkills(known)
     if (stored !== undefined) {
       for (const [name, on] of Object.entries(stored.skills ?? {})) {
@@ -496,6 +541,7 @@ export async function apply(ctx, config) {
     }
     entry.skills = skills
     entry.knownSkills = new Set(known.keys())
+    entry.sources = realSkillSources(known)
     reconcileSkills(entry)
   }
 
@@ -556,7 +602,7 @@ export async function apply(ctx, config) {
       const cwd = entry !== undefined ? entry.cwd : ''
       const c = cfg()
       const mcpEnabled = entry !== undefined ? entry.mcp : mcpEnabledForStored(sessionId, cwd)
-      const known = await skillInventory(cwd)
+      const known = await skillInventory(cwd, entry?.agent)
       const skillsEnabled = entry !== undefined ? entry.skills : skillsEnabledForStored(cwd, known)
       const servers = [...inventory.keys()].sort().map((server) => ({
         kind: 'mcp',
@@ -565,13 +611,20 @@ export async function apply(ctx, config) {
         official: c.officialServers.includes(server),
         detail: `${inventory.get(server).size} tools`,
       }))
-      const skills = [...known.keys()].sort().map((skillName) => ({
-        kind: 'skill',
-        name: skillName,
-        enabled: skillsEnabled.has(skillName),
-        official: OFFICIAL_SKILL_SOURCES.has(known.get(skillName)),
-        detail: String(known.get(skillName)),
-      }))
+      const skills = [...known.keys()].sort().map((skillName) => {
+        /* A gated skill is reported through its shadow; show the origin learned before gating. */
+        const reported = known.get(skillName)
+        const source = reported === SHADOW_SKILL_SOURCE
+          ? (entry?.sources.get(skillName) ?? SHADOW_SKILL_SOURCE)
+          : reported
+        return {
+          kind: 'skill',
+          name: skillName,
+          enabled: skillsEnabled.has(skillName),
+          official: OFFICIAL_SKILL_SOURCES.has(source),
+          detail: String(source),
+        }
+      })
       return { sessionId, cwd, mcp: servers, skills }
     },
     async set(sessionId, kind, target, enabled) {
