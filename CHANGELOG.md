@@ -4,6 +4,16 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.5.1 — 2026-11-04
+
+- Remove the token-cost estimate from the panel. The `~N tok` suffix is gone
+  from the pill, the tab subtitles and the row details, and the host no longer
+  emits a `tokens` field — the estimate was `JSON characters / 4`, which drifted
+  too far from the real tokenizer to be worth showing. The panel now reports
+  only what is on (`3/5`) and what each entry is.
+- Rename the pill label from "上下文" to "组件上下文" (English: "Context" →
+  "Components").
+
 ## 0.5.0 — 2026-11-04
 
 - Every row now carries a one-line description, so the panel says what an

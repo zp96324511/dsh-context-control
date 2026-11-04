@@ -235,8 +235,6 @@ export async function apply(ctx, config) {
   const scopedSeen = new Set()
   /** Names visible in the last global scan; the restrict fallback subset. */
   let globalSeen = new Set()
-  /** toolName -> JSON size in characters, for the panel's context-cost hint. */
-  const schemaCost = new Map()
   /** toolName -> model-facing description, the panel's second line. */
   const toolDescriptions = new Map()
   /** server -> MCP `instructions` text captured while assembling the system prompt. */
@@ -281,12 +279,9 @@ export async function apply(ctx, config) {
 
   /* ---------- inventory scans ---------- */
 
-  /** Record one schema's JSON size and description, the raw material of the panel's cost hint. */
+  /** Record one schema's model-facing description, the panel's second line. */
   function rememberSchema(schema) {
-    try {
-      schemaCost.set(schema.name, JSON.stringify(schema).length)
-      if (typeof schema.description === 'string') toolDescriptions.set(schema.name, schema.description)
-    } catch { /* a schema with a cycle is not worth failing over */ }
+    if (typeof schema.description === 'string') toolDescriptions.set(schema.name, schema.description)
   }
 
   /** Collapse a description to one line and cap it for the panel's popover. */
@@ -785,19 +780,6 @@ export async function apply(ctx, config) {
 
   /* ---------- shared operations (agent tool + Client remote) ---------- */
 
-  /** Rough token count of a set of tool schemas (~4 JSON chars per token). */
-  function tokensFor(names) {
-    let chars = 0
-    for (const name of names) chars += schemaCost.get(name) ?? 0
-    return chars === 0 ? 0 : Math.max(1, Math.round(chars / 4))
-  }
-
-  /** Panel detail for one tool or server: `~N tok`, or '' when no schema is known. */
-  function costDetail(names) {
-    const tokens = tokensFor(names)
-    return tokens === 0 ? '' : `~${tokens} tok`
-  }
-
   const ops = {
     async list(sessionId) {
       scanGlobal()
@@ -810,14 +792,12 @@ export async function apply(ctx, config) {
       const skillsEnabled = entry !== undefined ? entry.skills : skillsEnabledForStored(cwd, known)
       const servers = [...inventory.keys()].sort().map((server) => {
         const names = [...inventory.get(server)]
-        const cost = costDetail(names)
         return {
           kind: 'mcp',
           name: server,
           enabled: mcpEnabled.has(server),
           official: c.officialServers.includes(server),
-          detail: `${names.length} tools${cost === '' ? '' : ` · ${cost}`}`,
-          tokens: tokensFor(names),
+          detail: `${names.length} tools`,
           description: serverDescriptions.get(server) ?? '',
         }
       })
@@ -845,8 +825,7 @@ export async function apply(ctx, config) {
         name: toolName,
         enabled: toolsEnabled.has(toolName),
         official: true,
-        detail: costDetail([toolName]),
-        tokens: tokensFor([toolName]),
+        detail: '',
         description: oneLine(toolDescriptions.get(toolName) ?? ''),
       }))
       return { sessionId, cwd, mcp: servers, skills, tools }

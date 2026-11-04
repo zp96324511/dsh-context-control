@@ -229,14 +229,14 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     )
 
     /* ---- built-in tools ---- *
-     * Gateable tools are listed with a schema-cost estimate; MCP tools and the
-     * PTC entry point never appear in that list. */
+     * Gateable tools are listed with their description; MCP tools and the PTC
+     * entry point never appear in that list. */
     const withTools = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
     assert.deepEqual(withTools.tools.map((entry) => entry.name), ['bash', 'read'])
     for (const entry of withTools.tools) {
       assert.equal(entry.enabled, true, 'built-in tools start enabled')
-      assert.ok(entry.tokens > 0, 'a tool row carries its schema cost')
-      assert.match(entry.detail, /^~\d+ tok$/)
+      assert.equal(entry.detail, '', 'a tool row carries no cost detail')
+      assert.equal(typeof entry.tokens, 'undefined', 'the panel no longer estimates tokens')
     }
     assert.equal(withTools.tools.find((entry) => entry.name === 'read').description, 'read a file',
       'the schema description reaches the panel')

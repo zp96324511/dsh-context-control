@@ -236,15 +236,15 @@ const LIST = {
   sessionId: 's1',
   cwd: 'C:\\demo',
   mcp: [
-    { kind: 'mcp', name: 'hivemem', enabled: true, official: false, detail: '8 tools · ~2.4k tok', tokens: 2400, description: '跨会话记忆：检索、写入与归档' },
-    { kind: 'mcp', name: 'chrome-main', enabled: false, official: false, detail: '32 tools · ~8.0k tok', tokens: 8000, description: '' },
+    { kind: 'mcp', name: 'hivemem', enabled: true, official: false, detail: '8 tools', description: '跨会话记忆：检索、写入与归档' },
+    { kind: 'mcp', name: 'chrome-main', enabled: false, official: false, detail: '32 tools', description: '' },
   ],
   skills: [
-    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, official: true, detail: 'bundled', tokens: 0, description: '诊断 Windows 沙箱 ACL 拒绝' },
+    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, official: true, detail: 'bundled', description: '诊断 Windows 沙箱 ACL 拒绝' },
   ],
   tools: [
-    { kind: 'tool', name: 'read', enabled: true, official: true, detail: '~180 tok', tokens: 180, description: '读取文件内容' },
-    { kind: 'tool', name: 'bash', enabled: false, official: true, detail: '~300 tok', tokens: 300, description: '' },
+    { kind: 'tool', name: 'read', enabled: true, official: true, detail: '', description: '读取文件内容' },
+    { kind: 'tool', name: 'bash', enabled: false, official: true, detail: '', description: '' },
   ],
 };
 
@@ -253,13 +253,13 @@ const LIST = {
 const LIST_S2 = {
   sessionId: 's2',
   cwd: 'C:\\demo2',
-  mcp: [{ kind: 'mcp', name: 'chrome-p2', enabled: false, official: false, detail: '5 tools · ~1.0k tok', tokens: 1000 }],
-  skills: [{ kind: 'skill', name: 'office', enabled: true, official: false, detail: 'user', tokens: 0 }],
+  mcp: [{ kind: 'mcp', name: 'chrome-p2', enabled: false, official: false, detail: '5 tools' }],
+  skills: [{ kind: 'skill', name: 'office', enabled: true, official: false, detail: 'user' }],
   tools: [],
 };
 
 const DICT_ZH = {
-  panel: '上下文', none: '无', mcp: 'MCP', skill: 'Skill', tool: '工具', official: '官方', custom: '自配',
+  panel: '组件上下文', none: '无', mcp: 'MCP', skill: 'Skill', tool: '工具', official: '官方', custom: '自配',
   hint: '点击开关本会话的 MCP 服务器、技能与内置工具（下次请求生效，按项目记忆）', on: '已启用：', busy: '…',
   checkUpdate: '检查更新', checking: '检查中…', upToDate: '已是最新', available: '可升级',
   upgrade: '一键升级', upgrading: '升级中…', upgraded: '已升级，需重启', restart: '重启服务',
@@ -435,11 +435,12 @@ const fakeCtx = {
     assert(remoteCalls.some((call) => call[0] === 'list' && call[1] === 's1'), JSON.stringify(remoteCalls));
   });
 
-  check('pill text shows enabled/total and schema cost', () => {
+  check('pill text shows enabled/total', () => {
     const button = find(tree, (element) => element.tag === 'button')[0];
     assert(button !== undefined, 'no pill button');
     const text = find(button, (element) => element.text !== undefined).map((element) => element.text).join('');
-    assert(text.includes('上下文 3/5 · ~2.6k tok'), `pill text is "${text}"`);
+    assert(text.includes('组件上下文 3/5'), `pill text is "${text}"`);
+    assert(!text.includes('tok') && !text.includes('~'), `pill must not estimate tokens: "${text}"`);
   });
 
   check('pill tooltip lists enabled entries', () => {
@@ -483,17 +484,19 @@ const fakeCtx = {
     assert(switches[1].props['aria-description'] === undefined, 'empty description should stay absent');
   });
 
-  check('tabs carry on/total and cost for every kind', () => {
+  check('tabs carry on/total for every kind, with no cost estimate', () => {
     const tabs = find(tree, (element) => element.props?.['role'] === 'tab');
     assert(tabs.length === 3, `got ${tabs.length} tabs`);
     const textOf = (tab) => find(tab, (element) => element.text !== undefined)
       .map((element) => element.text).join(' ');
-    assert(textOf(tabs[0]).includes('MCP') && textOf(tabs[0]).includes('1/2 · ~2.4k tok'),
+    assert(textOf(tabs[0]).includes('MCP') && textOf(tabs[0]).includes('1/2'),
       `first tab is ${textOf(tabs[0])}`);
     assert(textOf(tabs[1]).includes('Skill') && textOf(tabs[1]).includes('1/1'),
       `second tab is ${textOf(tabs[1])}`);
-    assert(textOf(tabs[2]).includes('工具') && textOf(tabs[2]).includes('1/2 · ~180 tok'),
+    assert(textOf(tabs[2]).includes('工具') && textOf(tabs[2]).includes('1/2'),
       `third tab is ${textOf(tabs[2])}`);
+    assert(!textOf(tabs[0]).includes('tok') && !textOf(tabs[0]).includes('~'),
+      `the tab must not carry a token estimate: ${textOf(tabs[0])}`);
   });
 
   const menu = find(tree, (element) => element.props?.['data-context-control'] === 'menu')[0];
@@ -601,8 +604,8 @@ const fakeCtx = {
     const textOf = (anchor) => find(anchor, (element) => element.text !== undefined)
       .map((element) => element.text).join('');
     assert(remoteCalls.some((call) => call[0] === 'list' && call[1] === 's2'), JSON.stringify(remoteCalls));
-    assert(textOf(anchors[0]).includes('上下文 3/5 · ~2.6k tok'), `pane 1 text is "${textOf(anchors[0])}"`);
-    assert(textOf(anchors[1]).includes('上下文 1/2'), `pane 2 text is "${textOf(anchors[1])}"`);
+    assert(textOf(anchors[0]).includes('组件上下文 3/5'), `pane 1 text is "${textOf(anchors[0])}"`);
+    assert(textOf(anchors[1]).includes('组件上下文 1/2'), `pane 2 text is "${textOf(anchors[1])}"`);
   });
 
   anchorsOf(panesTree)[0].children[0].props.onClick();
@@ -730,7 +733,7 @@ const fakeCtx = {
   check('a pending update badges the pill without changing its text', () => {
     const badge = find(updateTree, (element) => element.props?.['data-context-control-update'] === 'available')[0];
     assert(badge !== undefined, 'no update badge on the pill');
-    assert(textOf(badge).includes('上下文 3/5 · ~2.6k tok'), `pill text changed: "${textOf(badge)}"`);
+    assert(textOf(badge).includes('组件上下文 3/5'), `pill text changed: "${textOf(badge)}"`);
     assert(textOf(badge).includes('↑'), 'the badge marker is missing');
     assert(badge.props.title.includes('有新版本'), 'the tooltip does not mention the update');
   });

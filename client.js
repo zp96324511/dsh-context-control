@@ -2,12 +2,11 @@
  * dsh-context-control — Client half.
  *
  * A compact panel in the composer dock: a pill showing how many MCP servers,
- * skills and built-in tools are enabled for the current session, plus the
- * approximate schema cost; expanded, one chip per entry with its origin badge
- * (official / user-configured), a one-line description and on/off state,
- * grouped by kind. Toggling calls the Host service over the Typert Gateway
- * (`remote.contextControl`), the same operations the `context_control` agent
- * tool uses.
+ * skills and built-in tools are enabled for the current session; expanded,
+ * one chip per entry with its origin badge (official / user-configured), a
+ * one-line description and on/off state, grouped by kind. Toggling calls the
+ * Host service over the Typert Gateway (`remote.contextControl`), the same
+ * operations the `context_control` agent tool uses.
  *
  * Each pill is session-scoped: the `conversation.input.left` slot hands it the
  * `sessionId` of the composer it sits in, so every composer on screen — the
@@ -39,7 +38,6 @@ window.__ModuleLoader__.load({
         enabled: { type: 'boolean' },
         official: { type: 'boolean' },
         detail: { type: 'string' },
-        tokens: { type: 'number' },
         description: { type: 'string' },
       },
       required: ['kind', 'name', 'enabled', 'official', 'detail'],
@@ -51,7 +49,6 @@ window.__ModuleLoader__.load({
       enabled: zod.boolean(),
       official: zod.boolean(),
       detail: zod.string(),
-      tokens: zod.number().optional(),
       description: zod.string().optional(),
     });
     const listResultSchema = () => zod.object({
@@ -166,7 +163,7 @@ window.__ModuleLoader__.load({
 
     const DICT = {
       zh: {
-        panel: '上下文',
+        panel: '组件上下文',
         none: '无 MCP 服务器、技能或工具',
         mcp: 'MCP',
         skill: 'Skill',
@@ -200,7 +197,7 @@ window.__ModuleLoader__.load({
         incompatible: '与当前 DSH 不兼容',
       },
       en: {
-        panel: 'Context',
+        panel: 'Components',
         none: 'No MCP servers, skills or tools',
         mcp: 'MCP',
         skill: 'Skill',
@@ -833,21 +830,6 @@ window.__ModuleLoader__.load({
         }
 
 
-        /** `~1.2k` — compact schema-cost formatting for the pill and group headers. */
-        function formatTokens(count) {
-          if (count < 1000) return String(count);
-          return `${(count / 1000).toFixed(1)}k`;
-        }
-
-        /** Schema chars/4 estimate summed over the enabled entries of one group. */
-        function enabledTokens(entries) {
-          let total = 0;
-          for (const entry of entries) {
-            if (entry.enabled) total += entry.tokens ?? 0;
-          }
-          return total;
-        }
-
         /* Tooltip for the collapsed pill: the usage hint plus what is on right
          * now, so the current surface is readable without opening the popover.
          * A pending update adds one line — the badge exists to be noticed from
@@ -893,8 +875,7 @@ window.__ModuleLoader__.load({
           if (snapshot.data !== undefined && servers.length === 0 && skills.length === 0 && tools.length === 0) return null;
           const enabledOf = (entries) => entries.filter((entry) => entry.enabled).length;
           const all = [...servers, ...skills, ...tools];
-          const onTokens = enabledTokens(all);
-          const countLabel = `${t('panel')}${snapshot.data === undefined ? '' : ` ${enabledOf(all)}/${all.length}${onTokens > 0 ? ` · ~${formatTokens(onTokens)} tok` : ''}`}${snapshot.busy ? t('busy') : ''}`;
+          const countLabel = `${t('panel')}${snapshot.data === undefined ? '' : ` ${enabledOf(all)}/${all.length}`}${snapshot.busy ? t('busy') : ''}`;
           const close = (restoreFocus) => {
             setOpen(false);
             if (!restoreFocus) return;
@@ -1080,12 +1061,11 @@ window.__ModuleLoader__.load({
             );
           };
 
-          /* A tab carries its own count: on/total plus the schema cost of the
-           * entries currently on — that number is the reason to gate tools. */
+          /* A tab carries its own count, so the picture stays readable while a
+           * single kind is shown. */
           const tab = (group) => {
             const on = group.entries.filter((entry) => entry.enabled).length;
-            const tokens = enabledTokens(group.entries);
-            const sub = `${on}/${group.entries.length}${tokens > 0 ? ` · ~${formatTokens(tokens)} tok` : ''}`;
+            const sub = `${on}/${group.entries.length}`;
             const selected = group === active;
             return h('button', {
               key: `tab:${group.key}`,

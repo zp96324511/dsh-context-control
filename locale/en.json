@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Context Control",
-    "description": "Per-session MCP, skill and built-in tool visibility with a schema-cost estimate: new sessions start lean; toggle entries on demand from the composer panel or through the model. Choices are remembered per project."
+    "description": "Per-session MCP, skill and built-in tool visibility: new sessions start lean; toggle entries on demand from the composer panel or through the model, and every entry says what it does. Choices are remembered per project."
   }
 }

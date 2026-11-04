@@ -1,6 +1,6 @@
 # dsh-context-control
 
-Session-scoped visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on for that session, and every row reports its schema cost estimated as `characters / 4` tokens — so the pill can say how much context the enabled entries cost in total. The choice is remembered per project. The plugin also **carries its own update channel**: it can tell you it is behind, upgrade itself in one click, and bring the host back.
+Session-scoped visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on for that session, and each row shows what the resource does. The choice is remembered per project. The plugin also **carries its own update channel**: it can tell you it is behind, upgrade itself in one click, and bring the host back.
 
 English | [中文](README.zh.md)
 
@@ -143,21 +143,18 @@ show up in the panel and can be toggled (off by default):
 If a skill is in the model's catalog but not in the panel, check that it lives
 in one of those roots, then look for `skill discovery failed` in the host log.
 
-### Which tools are gated (and what they cost)
+### Which tools are gated
 
-Tool schemas are the most fixed cost in the tool table: they are re-sent with
-every request. The panel therefore lists each **gateable built-in tool** as its
-own row with an estimated cost of `ceil(JSON.stringify(schema).length / 4)`
-(4 characters ≈ 1 token, schema only — the descriptive system-prompt section is
-not counted). The three kinds (MCP / skills / tools) are switched with tabs
-instead of stacking three groups; each tab shows `on/total · ~cost`, and the
-pill sums the enabled rows across all three: `Context 3/5 · ~2.6k tok`. Every
-row also carries a one-line description taken from the resource itself: tools
-use their schema `description`, skills use the catalog description, and an MCP
-server uses its `instructions` prose (captured from the `mcp:<server>`
-system-prompt section during assembly; a server that publishes none keeps a
-single-line row). Hover for the full description plus origin/cost, and screen
-readers get the same text through `aria-description`.
+The panel lists each **gateable built-in tool** as its own row, alongside MCP
+servers and skills. The three kinds (MCP / skills / tools) are switched with
+tabs instead of stacking three groups; each tab shows its own `on/total`, and
+the pill sums the three: `Components 3/5`. Every row also carries a one-line
+description taken from the resource itself: tools use their schema
+`description`, skills use the catalog description, and an MCP server uses its
+`instructions` prose (captured from the `mcp:<server>` system-prompt section
+during assembly; a server that publishes none keeps a single-line row). Hover
+for the full description plus origin, and screen readers get the same text
+through `aria-description`.
 
 - A disabled tool leaves the model's view through the same `tools.restrict`
   call that hides MCP tools, and its `tool:<name>` guidance section is dropped
@@ -168,8 +165,7 @@ readers get the same text through `aria-description`.
 - `run_code`, `context_control` and `structured_output` are protected: they are
   never listed and cannot be turned off — `context_control` is the entry point
   that opens the gate, and hiding it would lock the gate from the inside.
-- MCP tools are not listed individually (they follow their server switch); an
-  MCP row's cost is the sum of the schemas that server contributes, and
+- MCP tools are not listed individually (they follow their server switch), and
   `list_mcp_resources` and friends follow the server switch too.
 
 In `~/.dsh/profiles/web/cordis.patch.yml`:
