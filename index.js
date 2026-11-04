@@ -237,6 +237,10 @@ export async function apply(ctx, config) {
   let globalSeen = new Set()
   /** toolName -> JSON size in characters, for the panel's context-cost hint. */
   const schemaCost = new Map()
+  /** toolName -> model-facing description, the panel's second line. */
+  const toolDescriptions = new Map()
+  /** server -> MCP `instructions` text captured while assembling the system prompt. */
+  const serverDescriptions = new Map()
   /** Re-entrancy guard: reconcile's own dispose/apply fire tools/change. */
   let reconciling = false
   /** Re-entrancy guard: shadow registration/disposal fires skills/change. */
@@ -277,11 +281,18 @@ export async function apply(ctx, config) {
 
   /* ---------- inventory scans ---------- */
 
-  /** Record one schema's JSON size, the raw material of the panel's cost hint. */
+  /** Record one schema's JSON size and description, the raw material of the panel's cost hint. */
   function rememberSchema(schema) {
     try {
       schemaCost.set(schema.name, JSON.stringify(schema).length)
+      if (typeof schema.description === 'string') toolDescriptions.set(schema.name, schema.description)
     } catch { /* a schema with a cycle is not worth failing over */ }
+  }
+
+  /** Collapse a description to one line and cap it for the panel's popover. */
+  function oneLine(text, max = 400) {
+    const line = String(text ?? '').replace(/\s+/g, ' ').trim()
+    return line.length > max ? `${line.slice(0, max - 1)}…` : line
   }
 
   /** Scan the global tool view (immune to per-agent restrictions). @returns whether the inventory changed. */
@@ -411,15 +422,19 @@ export async function apply(ctx, config) {
    * catalog do.
    * @param cwd - project working directory; '' asks for the default view.
    * @param agent - viewing agent whose scope chain contributes preset skills; omitted for the global view.
+   * @param into - optional name -> description sink, filled from the same read.
    * @returns name -> source map; this plugin's own shadows report SHADOW_SKILL_SOURCE.
    */
-  async function skillInventory(cwd, agent) {
+  async function skillInventory(cwd, agent, into) {
     try {
       const options = cwd === '' ? {} : { cwd }
       if (agent !== undefined) options.scope = agent
       const summaries = await ctx.skills.list(options)
       const known = new Map()
-      for (const summary of summaries) known.set(summary.name, summary.source)
+      for (const summary of summaries) {
+        known.set(summary.name, summary.source)
+        if (into !== undefined) into.set(summary.name, summary.description ?? '')
+      }
       return known
     } catch (error) {
       warn(ctx, `skill discovery failed: ${String(error)}`)
@@ -619,10 +634,17 @@ export async function apply(ctx, config) {
 
   /** Refresh one agent's skill knowledge (new skills default, vanished ones drop) and re-apply shadows. */
   async function refreshSkills(entry) {
-    const known = await skillInventory(entry.cwd, entry.agent)
+    const descriptions = new Map()
+    const known = await skillInventory(entry.cwd, entry.agent, descriptions)
     for (const [name, source] of known) {
-      /* A shadow masks the real origin; keep the one learned before gating. */
-      if (source !== SHADOW_SKILL_SOURCE) entry.sources.set(name, source)
+      /* A shadow masks the real origin and description; keep the ones learned before gating. */
+      if (source !== SHADOW_SKILL_SOURCE) {
+        entry.sources.set(name, source)
+        const description = descriptions.get(name)
+        if (typeof description === 'string' && description !== '') {
+          entry.skillDescriptions.set(name, description)
+        }
+      }
       if (!entry.knownSkills.has(name)) {
         entry.knownSkills.add(name)
         const c = cfg()
@@ -637,6 +659,7 @@ export async function apply(ctx, config) {
         entry.knownSkills.delete(name)
         entry.skills.delete(name)
         entry.sources.delete(name)
+        entry.skillDescriptions.delete(name)
       }
     }
     reconcileSkills(entry)
@@ -672,12 +695,15 @@ export async function apply(ctx, config) {
       agent, cwd,
       mcp, tools, knownTools,
       skills: new Set(), knownSkills: new Set(), sources: new Map(),
+      skillDescriptions: new Map(),
       disposer: undefined,
       skillShadows: new Map(),
     }
     sessions.set(agent.id, entry)
     reconcile(entry)
-    const known = await skillInventory(cwd, agent)
+    const descriptions = new Map()
+    const known = await skillInventory(cwd, agent, descriptions)
+    entry.skillDescriptions = descriptions
     const skills = defaultsForSkills(known)
     if (stored !== undefined) {
       for (const [name, on] of Object.entries(stored.skills ?? {})) {
@@ -728,6 +754,14 @@ export async function apply(ctx, config) {
     for (const name of entry.knownTools) {
       if (!entry.tools.has(name)) disabledSections.add(TOOL_SECTION_PREFIX + name)
     }
+    /* An MCP server has no description field of its own; its `instructions`
+     * text is the only prose it publishes, and this section carries it. Keep a
+     * collapsed copy for the panel's second line before filtering. */
+    for (const section of assembly.sections) {
+      if (!section.name.startsWith('mcp:')) continue
+      const text = typeof section.text === 'string' ? section.text : ''
+      if (text !== '') serverDescriptions.set(section.name.slice(4), oneLine(text))
+    }
     const hasMcpSections = assembly.sections.some((section) => section.name.startsWith('mcp:'))
     if (hasMcpSections || disabledSections.size > 0) {
       assembly.sections = assembly.sections.filter((section) => {
@@ -771,7 +805,8 @@ export async function apply(ctx, config) {
       const cwd = entry !== undefined ? entry.cwd : ''
       const c = cfg()
       const mcpEnabled = entry !== undefined ? entry.mcp : mcpEnabledForStored(sessionId, cwd)
-      const known = await skillInventory(cwd, entry?.agent)
+      const descriptions = new Map()
+      const known = await skillInventory(cwd, entry?.agent, descriptions)
       const skillsEnabled = entry !== undefined ? entry.skills : skillsEnabledForStored(cwd, known)
       const servers = [...inventory.keys()].sort().map((server) => {
         const names = [...inventory.get(server)]
@@ -783,6 +818,7 @@ export async function apply(ctx, config) {
           official: c.officialServers.includes(server),
           detail: `${names.length} tools${cost === '' ? '' : ` · ${cost}`}`,
           tokens: tokensFor(names),
+          description: serverDescriptions.get(server) ?? '',
         }
       })
       const skills = [...known.keys()].sort().map((skillName) => {
@@ -791,12 +827,15 @@ export async function apply(ctx, config) {
         const source = reported === SHADOW_SKILL_SOURCE
           ? (entry?.sources.get(skillName) ?? SHADOW_SKILL_SOURCE)
           : reported
+        const description = entry?.skillDescriptions.get(skillName)
+          ?? (reported === SHADOW_SKILL_SOURCE ? '' : descriptions.get(skillName))
         return {
           kind: 'skill',
           name: skillName,
           enabled: skillsEnabled.has(skillName),
           official: OFFICIAL_SKILL_SOURCES.has(source),
           detail: String(source),
+          description: oneLine(description ?? ''),
         }
       })
       const knownTools = entry !== undefined ? entry.knownTools : builtinToolInventory(ctx)
@@ -808,6 +847,7 @@ export async function apply(ctx, config) {
         official: true,
         detail: costDetail([toolName]),
         tokens: tokensFor([toolName]),
+        description: oneLine(toolDescriptions.get(toolName) ?? ''),
       }))
       return { sessionId, cwd, mcp: servers, skills, tools }
     },

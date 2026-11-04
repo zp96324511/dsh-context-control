@@ -4,9 +4,10 @@
  * A compact panel in the composer dock: a pill showing how many MCP servers,
  * skills and built-in tools are enabled for the current session, plus the
  * approximate schema cost; expanded, one chip per entry with its origin badge
- * (official / user-configured) and on/off state, grouped by kind. Toggling
- * calls the Host service over the Typert Gateway (`remote.contextControl`),
- * the same operations the `context_control` agent tool uses.
+ * (official / user-configured), a one-line description and on/off state,
+ * grouped by kind. Toggling calls the Host service over the Typert Gateway
+ * (`remote.contextControl`), the same operations the `context_control` agent
+ * tool uses.
  *
  * Each pill is session-scoped: the `conversation.input.left` slot hands it the
  * `sessionId` of the composer it sits in, so every composer on screen — the
@@ -39,6 +40,7 @@ window.__ModuleLoader__.load({
         official: { type: 'boolean' },
         detail: { type: 'string' },
         tokens: { type: 'number' },
+        description: { type: 'string' },
       },
       required: ['kind', 'name', 'enabled', 'official', 'detail'],
       additionalProperties: false,
@@ -50,6 +52,7 @@ window.__ModuleLoader__.load({
       official: zod.boolean(),
       detail: zod.string(),
       tokens: zod.number().optional(),
+      description: zod.string().optional(),
     });
     const listResultSchema = () => zod.object({
       sessionId: zod.string(),
@@ -301,9 +304,18 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-primary, inherit)',
       },
       menuRowMain: {
-        display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: 0,
+        display: 'flex', flexDirection: 'column', alignItems: 'stretch',
+        gap: '1px', flex: '1 1 auto', minWidth: 0,
+      },
+      menuTop: {
+        display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0,
       },
       menuName: {
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      },
+      menuDesc: {
+        fontSize: '10px', lineHeight: '13px', maxWidth: '100%',
+        color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       },
       stateMark: {
@@ -1026,6 +1038,7 @@ window.__ModuleLoader__.load({
           const row = (entry) => {
             const index = rowIndex;
             rowIndex += 1;
+            const description = entry.description ?? '';
             return h('button', {
               key: `${entry.kind}:${entry.name}`,
               ref: (element) => { rowRefs.current[index] = element ?? null; },
@@ -1034,7 +1047,8 @@ window.__ModuleLoader__.load({
               'aria-checked': entry.enabled ? 'true' : 'false',
               'aria-disabled': snapshot.busy ? 'true' : 'false',
               'aria-label': entry.name,
-              title: entry.detail ?? '',
+              'aria-description': description === '' ? undefined : description,
+              title: [description, entry.detail ?? ''].filter((part) => part !== '').join('\n'),
               style: entry.enabled ? { ...CSS.menuRow, ...CSS.menuRowOn } : CSS.menuRow,
               onMouseEnter: (event) => {
                 event.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12))';
@@ -1056,8 +1070,11 @@ window.__ModuleLoader__.load({
               },
             },
               h('span', { style: CSS.menuRowMain },
-                entry.kind === 'tool' ? null : h('span', { style: CSS.badge }, entry.official ? t('official') : t('custom')),
-                h('span', { style: CSS.menuName }, entry.name),
+                h('span', { style: CSS.menuTop },
+                  entry.kind === 'tool' ? null : h('span', { style: CSS.badge }, entry.official ? t('official') : t('custom')),
+                  h('span', { style: CSS.menuName }, entry.name),
+                ),
+                description === '' ? null : h('span', { style: CSS.menuDesc }, description),
               ),
               h('span', { style: CSS.stateMark }, entry.enabled ? '●' : '○'),
             );

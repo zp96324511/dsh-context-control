@@ -177,6 +177,8 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     assert.equal(byName.get('bundled-one').enabled, true, 'bundled skills stay on by default')
     assert.equal(byName.get('probe-agents').enabled, false, 'user skills start gated off')
     assert.equal(byName.get('probe-agents').detail, 'user-agents')
+    assert.equal(byName.get('probe-agents').description, 'from ~/.agents/skills',
+      'the catalog description reaches the panel')
     assert.equal(byName.get('probe-dsh').official, false)
 
     /* Both preset-provided skills arrived gated: one shadow each, properly marked. */
@@ -214,6 +216,8 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     assert.equal(gated.enabled, false)
     assert.equal(gated.detail, 'user-agents')
     assert.equal(gated.official, false)
+    assert.equal(gated.description, 'from ~/.agents/skills',
+      'the shadow text must not replace the real description')
 
     /* A catalog change re-reads through the scope and keeps the gated set stable. */
     await listeners.get('skills/change')()
@@ -234,8 +238,23 @@ test('skill discovery reads through the agent scope, and preset skills are gated
       assert.ok(entry.tokens > 0, 'a tool row carries its schema cost')
       assert.match(entry.detail, /^~\d+ tok$/)
     }
+    assert.equal(withTools.tools.find((entry) => entry.name === 'read').description, 'read a file',
+      'the schema description reaches the panel')
     assert.ok(!withTools.tools.some((entry) => entry.name === 'run_code'), 'protected tools are not listed')
     assert.ok(!withTools.tools.some((entry) => entry.name.startsWith('mcp__')), 'MCP tools are gated via their server')
+
+    /* MCP servers have no description field; their `instructions` prose arrives
+     * in the `mcp:<server>` system-prompt section, captured at assembly. */
+    const assemble = listeners.get('system-prompt/assemble')
+    assemble({
+      sections: [
+        { name: 'mcp:demo', text: 'Demo server:  lists things.\nCall it sparingly.' },
+        { name: 'mcp-resource-servers', text: 'Servers: ["demo"].' },
+      ],
+    }, { agent }, () => {})
+    const listedMcp = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
+    const demo = listedMcp.mcp.find((entry) => entry.name === 'demo')
+    assert.equal(demo.description, 'Demo server: lists things. Call it sparingly.')
 
     /* Disabling a tool re-applies the one restriction: the server's tools stay
      * denied and the disabled built-in joins them. */

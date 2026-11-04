@@ -151,7 +151,13 @@ own row with an estimated cost of `ceil(JSON.stringify(schema).length / 4)`
 (4 characters ≈ 1 token, schema only — the descriptive system-prompt section is
 not counted). The three kinds (MCP / skills / tools) are switched with tabs
 instead of stacking three groups; each tab shows `on/total · ~cost`, and the
-pill sums the enabled rows across all three: `Context 3/5 · ~2.6k tok`.
+pill sums the enabled rows across all three: `Context 3/5 · ~2.6k tok`. Every
+row also carries a one-line description taken from the resource itself: tools
+use their schema `description`, skills use the catalog description, and an MCP
+server uses its `instructions` prose (captured from the `mcp:<server>`
+system-prompt section during assembly; a server that publishes none keeps a
+single-line row). Hover for the full description plus origin/cost, and screen
+readers get the same text through `aria-description`.
 
 - A disabled tool leaves the model's view through the same `tools.restrict`
   call that hides MCP tools, and its `tool:<name>` guidance section is dropped

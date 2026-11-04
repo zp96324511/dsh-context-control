@@ -6,6 +6,13 @@ is what an installed copy reads to discover the next version.
 
 ## 0.5.0 — 2026-11-04
 
+- Every row now carries a one-line description, so the panel says what an
+  entry does instead of only its name. Tools use their schema `description`,
+  skills use the catalog description, and an MCP server uses its `instructions`
+  prose (captured from the `mcp:<server>` system-prompt section during
+  `system-prompt/assemble`; a server that publishes none keeps a single-line
+  row). The row title carries the full description plus the origin/cost
+  detail, and the text is exposed as `aria-description` for screen readers.
 - The popover now switches between the three kinds with tabs instead of
   stacking three vertically scrolling groups; each tab carries its own
   `on/total · ~cost` so the count stays visible while a single list is shown.

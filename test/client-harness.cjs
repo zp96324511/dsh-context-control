@@ -236,15 +236,15 @@ const LIST = {
   sessionId: 's1',
   cwd: 'C:\\demo',
   mcp: [
-    { kind: 'mcp', name: 'hivemem', enabled: true, official: false, detail: '8 tools · ~2.4k tok', tokens: 2400 },
-    { kind: 'mcp', name: 'chrome-main', enabled: false, official: false, detail: '32 tools · ~8.0k tok', tokens: 8000 },
+    { kind: 'mcp', name: 'hivemem', enabled: true, official: false, detail: '8 tools · ~2.4k tok', tokens: 2400, description: '跨会话记忆：检索、写入与归档' },
+    { kind: 'mcp', name: 'chrome-main', enabled: false, official: false, detail: '32 tools · ~8.0k tok', tokens: 8000, description: '' },
   ],
   skills: [
-    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, official: true, detail: 'bundled', tokens: 0 },
+    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, official: true, detail: 'bundled', tokens: 0, description: '诊断 Windows 沙箱 ACL 拒绝' },
   ],
   tools: [
-    { kind: 'tool', name: 'read', enabled: true, official: true, detail: '~180 tok', tokens: 180 },
-    { kind: 'tool', name: 'bash', enabled: false, official: true, detail: '~300 tok', tokens: 300 },
+    { kind: 'tool', name: 'read', enabled: true, official: true, detail: '~180 tok', tokens: 180, description: '读取文件内容' },
+    { kind: 'tool', name: 'bash', enabled: false, official: true, detail: '~300 tok', tokens: 300, description: '' },
   ],
 };
 
@@ -471,6 +471,16 @@ const fakeCtx = {
   check('the popover opens on the first non-empty tab', () => {
     assert(switches.length === 2, `got ${switches.length} switch rows`);
     assert(switches[0].props['aria-label'] === 'hivemem', `first row is ${switches[0].props['aria-label']}`);
+  });
+
+  check('rows show a one-line description from the host', () => {
+    const textOf = (row) => find(row, (element) => element.text !== undefined)
+      .map((element) => element.text).join('');
+    assert(textOf(switches[0]).includes('跨会话记忆：检索、写入与归档'), `first row is ${textOf(switches[0])}`);
+    assert(switches[0].props['aria-description'] === '跨会话记忆：检索、写入与归档', 'aria-description missing');
+    assert(switches[0].props.title.includes('跨会话记忆'), `title is ${switches[0].props.title}`);
+    assert(!textOf(switches[1]).includes('跨会话'), `second row picked up a foreign description: ${textOf(switches[1])}`);
+    assert(switches[1].props['aria-description'] === undefined, 'empty description should stay absent');
   });
 
   check('tabs carry on/total and cost for every kind', () => {
