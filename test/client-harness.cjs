@@ -468,16 +468,22 @@ const fakeCtx = {
   }
 
   const switches = find(tree, (element) => element.props?.['role'] === 'switch');
-  check('popover renders one switch per entry', () => {
-    assert(switches.length === 5, `got ${switches.length} switch rows`);
+  check('the popover opens on the first non-empty tab', () => {
+    assert(switches.length === 2, `got ${switches.length} switch rows`);
+    assert(switches[0].props['aria-label'] === 'hivemem', `first row is ${switches[0].props['aria-label']}`);
   });
 
-  check('group headers carry on/total and cost', () => {
-    const menu = find(tree, (element) => element.props?.['data-context-control'] === 'menu')[0];
-    const labels = find(menu, (element) => element.text !== undefined).map((element) => element.text);
-    assert(labels.includes('MCP · 1/2 · ~2.4k tok'), `groups are ${JSON.stringify(labels)}`);
-    assert(labels.includes('Skill · 1/1'), `groups are ${JSON.stringify(labels)}`);
-    assert(labels.includes('工具 · 1/2 · ~180 tok'), `groups are ${JSON.stringify(labels)}`);
+  check('tabs carry on/total and cost for every kind', () => {
+    const tabs = find(tree, (element) => element.props?.['role'] === 'tab');
+    assert(tabs.length === 3, `got ${tabs.length} tabs`);
+    const textOf = (tab) => find(tab, (element) => element.text !== undefined)
+      .map((element) => element.text).join(' ');
+    assert(textOf(tabs[0]).includes('MCP') && textOf(tabs[0]).includes('1/2 · ~2.4k tok'),
+      `first tab is ${textOf(tabs[0])}`);
+    assert(textOf(tabs[1]).includes('Skill') && textOf(tabs[1]).includes('1/1'),
+      `second tab is ${textOf(tabs[1])}`);
+    assert(textOf(tabs[2]).includes('工具') && textOf(tabs[2]).includes('1/2 · ~180 tok'),
+      `third tab is ${textOf(tabs[2])}`);
   });
 
   const menu = find(tree, (element) => element.props?.['data-context-control'] === 'menu')[0];
@@ -516,6 +522,30 @@ const fakeCtx = {
     const call = remoteCalls[before];
     assert(call !== undefined && call[0] === 'set', 'click did not reach the remote');
     assert(call[1] === 's1' && call[2] === 'mcp' && call[3] === 'chrome-main' && call[4] === true, JSON.stringify(call));
+  });
+
+  /* Tabs: each kind renders alone, and the strip is reachable with arrows. */
+  check('a tab shows only its own kind', () => {
+    const tabs = find(tree, (element) => element.props?.['role'] === 'tab');
+    tabs[2].props.onClick();
+    tree = mount({ type: Pill, props: { sessionId: 's1' } });
+    const rows = find(tree, (element) => element.props?.['role'] === 'switch');
+    assert(rows.length === 2, `tools tab rendered ${rows.length} rows`);
+    assert(rows.map((row) => row.props['aria-label']).join(',') === 'read,bash',
+      `tools tab rendered ${rows.map((row) => row.props['aria-label'])}`);
+  });
+
+  check('Left/Right on the tab strip switches kinds and takes focus', () => {
+    const strip = find(tree, (element) => element.props?.['role'] === 'tablist')[0];
+    let prevented = false;
+    strip.props.onKeyDown({ key: 'ArrowRight', preventDefault() { prevented = true; } });
+    assert(prevented, 'ArrowRight on the strip was not handled');
+    tree = mount({ type: Pill, props: { sessionId: 's1' } });
+    const rows = find(tree, (element) => element.props?.['role'] === 'switch');
+    assert(rows.length === 2 && rows[0].props['aria-label'] === 'hivemem',
+      'ArrowRight from the last tab did not wrap to the first kind');
+    const tabs = find(tree, (element) => element.props?.['role'] === 'tab');
+    assert(activeElement === tabs[0], 'focus did not follow the tab switch');
   });
 
   check('Escape closes and returns focus to the pill', () => {

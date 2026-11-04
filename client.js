@@ -247,7 +247,7 @@ window.__ModuleLoader__.load({
       },
       menu: {
         position: 'fixed', zIndex: 80,
-        maxHeight: '320px', overflowY: 'auto',
+        maxHeight: '320px', overflow: 'hidden',
         overscrollBehavior: 'contain',
         padding: '6px',
         display: 'flex', flexDirection: 'column', gap: '1px',
@@ -256,10 +256,38 @@ window.__ModuleLoader__.load({
         borderRadius: '10px',
         boxShadow: '0 10px 28px rgba(0,0,0,.38), 0 2px 8px rgba(0,0,0,.28)',
       },
-      menuGroup: {
-        padding: '5px 8px 3px',
-        fontSize: '11px', lineHeight: '16px',
+      /* One tab per kind instead of three stacked groups: with every kind
+       * populated the list no longer fits above the composer, and the counts
+       * stay readable at a glance. */
+      tabBar: {
+        display: 'flex', gap: '2px', flex: 'none',
+        padding: '2px', marginBottom: '2px',
+        background: 'rgba(128,128,128,.10)',
+        borderRadius: '8px',
+      },
+      tab: {
+        flex: '1 1 0', minWidth: 0,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0',
+        padding: '3px 4px', border: 'none', borderRadius: '6px',
+        background: 'transparent', cursor: 'pointer',
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
+      },
+      tabOn: {
+        background: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.18))',
+        color: 'var(--dsw-alias-label-primary, inherit)',
+      },
+      tabLabel: {
+        fontSize: '11px', lineHeight: '15px', maxWidth: '100%',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      },
+      tabSub: {
+        fontSize: '10px', lineHeight: '13px', maxWidth: '100%',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      },
+      tabBody: {
+        display: 'flex', flexDirection: 'column', gap: '1px',
+        flex: '1 1 auto', minHeight: 0, overflowY: 'auto',
+        overscrollBehavior: 'contain',
       },
       menuRow: {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -899,6 +927,10 @@ window.__ModuleLoader__.load({
           const { anchorRef, state, snapshot, sessionId, onClose } = props;
           const menuRef = useRef(null);
           const rowRefs = useRef([]);
+          const tabRefs = useRef({});
+          /* Which kind's rows are shown. `undefined` means the first non-empty
+           * tab, so a session that only has MCP servers still opens useful. */
+          const [activeKey, setActiveKey] = useState(undefined);
           /* The document listeners are bound once per anchor, so they reach the
            * current closer through a ref instead of capturing the first one. */
           const onCloseRef = useRef(onClose);
@@ -976,10 +1008,19 @@ window.__ModuleLoader__.load({
             rows[0].focus({ preventScroll: true });
           }, [opened]);
 
-          if (pos === undefined) return null;
           const servers = snapshot.data?.mcp ?? [];
           const skills = snapshot.data?.skills ?? [];
           const tools = snapshot.data?.tools ?? [];
+          /* One tab per kind, in display order; an empty kind has nothing to
+           * show, so it gets no tab at all. */
+          const groups = [
+            { key: 'mcp', label: t('mcp'), entries: servers },
+            { key: 'skill', label: t('skill'), entries: skills },
+            { key: 'tool', label: t('tool'), entries: tools },
+          ].filter((group) => group.entries.length > 0);
+          const active = groups.find((group) => group.key === activeKey) ?? groups[0];
+
+          if (pos === undefined || active === undefined) return null;
           let rowIndex = 0;
           rowRefs.current = [];
           const row = (entry) => {
@@ -1022,13 +1063,56 @@ window.__ModuleLoader__.load({
             );
           };
 
-          /* One header per group: on/total plus the schema cost of the entries
-           * that are currently on — that number is the reason to gate tools. */
-          const groupHeader = (key, label, entries) => {
-            const on = entries.filter((entry) => entry.enabled).length;
-            const tokens = enabledTokens(entries);
-            const cost = tokens > 0 ? ` · ~${formatTokens(tokens)} tok` : '';
-            return h('div', { key: `group:${key}`, style: CSS.menuGroup }, `${label} · ${on}/${entries.length}${cost}`);
+          /* A tab carries its own count: on/total plus the schema cost of the
+           * entries currently on — that number is the reason to gate tools. */
+          const tab = (group) => {
+            const on = group.entries.filter((entry) => entry.enabled).length;
+            const tokens = enabledTokens(group.entries);
+            const sub = `${on}/${group.entries.length}${tokens > 0 ? ` · ~${formatTokens(tokens)} tok` : ''}`;
+            const selected = group === active;
+            return h('button', {
+              key: `tab:${group.key}`,
+              ref: (element) => { tabRefs.current[group.key] = element ?? null; },
+              type: 'button',
+              role: 'tab',
+              id: `context-control-tab-${group.key}`,
+              'aria-selected': selected ? 'true' : 'false',
+              'aria-controls': 'context-control-tabpanel',
+              tabIndex: selected ? 0 : -1,
+              'data-context-control-tab': group.key,
+              title: `${group.label} · ${sub}`,
+              style: selected ? { ...CSS.tab, ...CSS.tabOn } : CSS.tab,
+              onClick: () => setActiveKey(group.key),
+            },
+              h('span', { style: CSS.tabLabel }, group.label),
+              h('span', { style: CSS.tabSub }, sub),
+            );
+          };
+
+          /* Keyboard on the tab strip: left/right moves between kinds (focus
+           * follows, so Tab never falls out of the strip), down enters rows. */
+          const onTabKeyDown = (event) => {
+            const index = groups.indexOf(active);
+            if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+              event.preventDefault();
+              const delta = event.key === 'ArrowRight' ? 1 : -1;
+              const next = groups[(index + delta + groups.length) % groups.length];
+              setActiveKey(next.key);
+              tabRefs.current[next.key]?.focus();
+            } else if (event.key === 'ArrowDown') {
+              event.preventDefault();
+              rowRefs.current.find((row) => row != null)?.focus();
+            } else if (event.key === 'Home') {
+              event.preventDefault();
+              const first = groups[0];
+              setActiveKey(first.key);
+              tabRefs.current[first.key]?.focus();
+            } else if (event.key === 'End') {
+              event.preventDefault();
+              const last = groups[groups.length - 1];
+              setActiveKey(last.key);
+              tabRefs.current[last.key]?.focus();
+            }
           };
 
           return createPortal(h('div', {
@@ -1040,15 +1124,27 @@ window.__ModuleLoader__.load({
             'data-context-control-session': sessionId,
             style: { ...CSS.menu, left: pos.left, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight },
           },
-            servers.length > 0 ? groupHeader('mcp', t('mcp'), servers) : null,
-            servers.map(row),
-            skills.length > 0 ? groupHeader('skill', t('skill'), skills) : null,
-            skills.map(row),
-            tools.length > 0 ? groupHeader('tool', t('tool'), tools) : null,
-            tools.map(row),
-            snapshot.error !== undefined ? h('div', { style: CSS.error }, snapshot.error) : null,
+            /* A lone kind needs no switcher (and no wasted row above it). */
+            groups.length > 1 ? h('div', {
+              key: '__tabs',
+              role: 'tablist',
+              id: 'context-control-tablist',
+              'aria-label': t('panel'),
+              'aria-orientation': 'horizontal',
+              onKeyDown: onTabKeyDown,
+              style: CSS.tabBar,
+            }, groups.map(tab)) : null,
+            h('div', {
+              key: '__body',
+              role: 'tabpanel',
+              id: 'context-control-tabpanel',
+              'aria-labelledby': groups.length > 1 ? `context-control-tab-${active.key}` : undefined,
+              'aria-label': groups.length > 1 ? undefined : active.label,
+              style: CSS.tabBody,
+            }, active.entries.map(row)),
+            snapshot.error !== undefined ? h('div', { key: '__error', style: CSS.error }, snapshot.error) : null,
             h(UpdateFooter, { key: '__update' }),
-            h('div', { style: CSS.hint }, t('hint')),
+            h('div', { key: '__hint', style: CSS.hint }, t('hint')),
           ), document.body);
         }
 

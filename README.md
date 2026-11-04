@@ -149,8 +149,9 @@ Tool schemas are the most fixed cost in the tool table: they are re-sent with
 every request. The panel therefore lists each **gateable built-in tool** as its
 own row with an estimated cost of `ceil(JSON.stringify(schema).length / 4)`
 (4 characters ≈ 1 token, schema only — the descriptive system-prompt section is
-not counted). The pill and each group header sum the enabled rows:
-`Context 3/5 · ~2.6k tok`.
+not counted). The three kinds (MCP / skills / tools) are switched with tabs
+instead of stacking three groups; each tab shows `on/total · ~cost`, and the
+pill sums the enabled rows across all three: `Context 3/5 · ~2.6k tok`.
 
 - A disabled tool leaves the model's view through the same `tools.restrict`
   call that hides MCP tools, and its `tool:<name>` guidance section is dropped

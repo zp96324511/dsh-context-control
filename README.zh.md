@@ -153,7 +153,7 @@ DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的
 
 ### 门控覆盖哪些工具（成本怎么算）
 
-工具 schema 是工具表里最固定的开销：它们每个请求都要重发一遍。所以面板把每个**可门控的内置工具**单独列成一行，并显示估算成本 `ceil(JSON.stringify(schema).length / 4)`（即 4 字符 ≈ 1 token，只算 schema，不含描述性 system-prompt 段）。胶囊和分组标题会把已启用条目的成本加起来——`上下文 3/5 · ~2.6k tok`。
+工具 schema 是工具表里最固定的开销：它们每个请求都要重发一遍。所以面板把每个**可门控的内置工具**单独列成一行，并显示估算成本 `ceil(JSON.stringify(schema).length / 4)`（即 4 字符 ≈ 1 token，只算 schema，不含描述性 system-prompt 段）。三类条目（MCP / 技能 / 工具）现在用 tab 切换而不是竖向堆三组；每个 tab 自带 `开/总 · ~成本`，胶囊则把三类已启用条目的成本加在一起——`上下文 3/5 · ~2.6k tok`。
 
 - 关掉的工具从模型视图里移除（和 MCP 工具共用同一次 `tools.restrict`），并在 `system-prompt/assemble` 时删掉对应的 `tool:<名字>` 引导段；只 restrict 是不够的，那段文本不属于 schema。
 - 内置工具**默认全开**，这样升级不会改变现有行为；想默认关掉某几个，用 `defaultOffTools`（见下）。

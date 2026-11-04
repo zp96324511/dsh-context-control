@@ -6,6 +6,13 @@ is what an installed copy reads to discover the next version.
 
 ## 0.5.0 — 2026-11-04
 
+- The popover now switches between the three kinds with tabs instead of
+  stacking three vertically scrolling groups; each tab carries its own
+  `on/total · ~cost` so the count stays visible while a single list is shown.
+  Tabs are a real `tablist` (roving tabindex, Left/Right/Home/End, Down into
+  the rows), an empty kind gets no tab, and a kind that is the only one present
+  renders without a strip at all. The tab strip stays pinned while the rows
+  scroll under it.
 - Built-in tools are now gated alongside MCP servers and skills. Tool schemas
   are the largest fixed cost in the tool table (they are re-sent on every
   request), so the panel lists every gateable tool with an estimated token
