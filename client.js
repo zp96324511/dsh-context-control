@@ -782,6 +782,12 @@ window.__ModuleLoader__.load({
           const action = updateAction(update)
           const note = updateNote(update)
           const phase = update.phase
+          /* In idle/current the action button below *is* the check request,
+           * so a ⟳ beside it would be the same button twice. In every other
+           * phase (busy, upgrade, restart, error) the ⟳ is the one re-ask a
+           * stale tab cannot make through that button, so it stays there —
+           * the row offers exactly one check action at a time. */
+          const checkIsTheAction = action.busy !== true && action.label === t('checkUpdate')
           const noteStyle = phase === 'error'
             ? { ...CSS.footerNote, ...CSS.footerNoteError }
             : phase === 'available' || phase === 'upgraded' || phase === 'upgrading'
@@ -799,9 +805,10 @@ window.__ModuleLoader__.load({
                 style: CSS.footerButton,
                 onClick: () => { setShowLog(!showLog) },
               }, showLog ? t('hideDetails') : t('details')),
-              /* Always available: whatever phase the row is in, the user can
-               * ask again — the one thing a stale tab cannot do otherwise. */
-              h('button', {
+              /* Kept in every phase where the action button cannot re-ask —
+               * the one thing a stale tab cannot do otherwise. Hidden where
+               * the action button already *is* the check request. */
+              checkIsTheAction ? null : h('button', {
                 type: 'button',
                 title: t('checkUpdate'),
                 'aria-label': t('checkUpdate'),

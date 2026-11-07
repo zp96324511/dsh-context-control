@@ -4,6 +4,16 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.5.2 — 2026-11-07
+
+- Fix: the popover's footer version row showed two check-for-updates buttons in
+  a row in the idle and up-to-date states — the always-present ⟳ button and the
+  text action button both forced the same re-check. The row now hides the ⟳
+  whenever the action button *is* the check request, and keeps it in every
+  other phase (busy, upgrading, restart, error), which are exactly the places
+  a stale tab can only re-ask through it. The up-to-date row goes back to the
+  documented single `[Check for updates]` / `[检查更新]` button.
+
 ## 0.5.1 — 2026-11-04
 
 - Remove the token-cost estimate from the panel. The `~N tok` suffix is gone

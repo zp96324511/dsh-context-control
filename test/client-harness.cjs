@@ -712,6 +712,16 @@ const fakeCtx = {
     assert(text.includes('检查更新'), `no check action: "${text}"`);
   });
 
+  /* The text check button and the ⟳ button would do the same thing in this
+   * phase, so the row must show exactly one of them — the text one, which
+   * is what the README documents for the up-to-date state. */
+  check('an up-to-date row offers one check button, not two', () => {
+    const footer = footerOf(updateTree);
+    const extra = find(footer, (element) => element.props?.['data-context-control'] === 'update-check');
+    assert(extra.length === 0, `the ⟳ button repeats the check action (${extra.length} extra)`);
+    assert(textOf(actionOf(footer)) === '检查更新', 'the text check button is missing');
+  });
+
   fetchMode = 'local';
   actionOf(updateTree).props.onClick();
   await new Promise((resolve) => setTimeout(resolve, 40));
