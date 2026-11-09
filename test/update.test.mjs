@@ -8,8 +8,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve, sep } from 'node:path'
 
 import {
   compareVersions,
@@ -18,8 +18,11 @@ import {
   classifySpec,
   createUpdater,
   createUpdateRoutes,
+  findProfile,
   parseVersion,
   resolveChannel,
+  resolveDshHome,
+  resolveRegistry,
   satisfiesRange,
 } from '../update.js'
 
@@ -203,6 +206,96 @@ const channelDocument = (base, latest) => ({
   },
   homepage: 'https://example.invalid/dsh-context-control',
 })
+
+/* ------------------------------------------------------------------ *
+ * DSH home resolution and user-level npm configuration
+ * ------------------------------------------------------------------ */
+
+test('a DSH_HOME with a trailing separator still finds the profile', () => {
+  const { home, dir } = profileHome('^0.6.0')
+  const previous = process.env.DSH_HOME
+  try {
+    // Both separators are separators to Node on Windows; only `/` elsewhere.
+    const forms = process.platform === 'win32' ? [home + '\\', home + '/'] : [home + '/']
+    for (const value of forms) {
+      process.env.DSH_HOME = value
+      assert.equal(resolveDshHome(), resolve(home), `a trailing separator survived: ${value}`)
+      const profile = findProfile(undefined, 'dsh-context-control')
+      assert.equal(profile?.dir, dir, `profile scan missed the profile for ${value}`)
+      assert.equal(profile?.source, 'scan')
+      assert.ok(!profile.dir.includes(`${sep}${sep}`) && !profile.dir.includes('//'), `duplicate separators in ${profile.dir}`)
+    }
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+  }
+})
+
+test('a DSH_HOME with surrounding whitespace resolves to the trimmed value', () => {
+  const { home, dir } = profileHome('^0.6.0')
+  const previous = process.env.DSH_HOME
+  process.env.DSH_HOME = `  \t${home}  \n`
+  try {
+    assert.equal(resolveDshHome(), resolve(home), 'the untrimmed value was used')
+    assert.equal(findProfile(undefined, 'dsh-context-control')?.dir, dir)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+  }
+})
+
+test('a tilde DSH_HOME expands against the OS home', () => {
+  const previous = process.env.DSH_HOME
+  const expected = join(homedir(), 'dcc-tilde-probe')
+  try {
+    for (const value of ['~/dcc-tilde-probe', '~\\dcc-tilde-probe']) {
+      process.env.DSH_HOME = value
+      const resolved = resolveDshHome()
+      assert.equal(resolved, expected, `${value} resolved to ${resolved}`)
+      assert.ok(!resolved.includes('~'), `a literal ~ leaked into ${resolved}`)
+    }
+    process.env.DSH_HOME = '~'
+    assert.equal(resolveDshHome(), resolve(homedir()))
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+  }
+})
+
+test('a blank DSH_HOME falls back to <home>/.dsh', () => {
+  const previous = process.env.DSH_HOME
+  const expected = resolve(join(homedir(), '.dsh'))
+  try {
+    process.env.DSH_HOME = '   \t\n'
+    assert.equal(resolveDshHome(), expected, 'whitespace was treated as a path')
+    delete process.env.DSH_HOME
+    assert.equal(resolveDshHome(), expected, 'an unset DSH_HOME did not fall back')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+  }
+})
+
+test('resolveRegistry survives a missing ~/.npmrc and keeps its precedence', () => {
+  const npmHome = mkdtempSync(join(tmpdir(), 'dcc-npmrc-'))
+  const fallback = 'https://fallback.invalid/'
+  const previous = process.env.npm_config_registry
+  delete process.env.npm_config_registry
+  try {
+    // No ~/.npmrc at all: the old read threw ENOENT and failed the whole channel.
+    assert.equal(resolveRegistry(fallback, { home: npmHome }), fallback)
+
+    writeFileSync(join(npmHome, '.npmrc'), 'registry=https://registry.example/\n')
+    assert.equal(resolveRegistry(fallback, { home: npmHome }), 'https://registry.example/')
+
+    process.env.npm_config_registry = 'https://env.example/'
+    assert.equal(resolveRegistry(fallback, { home: npmHome }), 'https://env.example/', 'the environment variable wins')
+  } finally {
+    if (previous === undefined) delete process.env.npm_config_registry
+    else process.env.npm_config_registry = previous
+  }
+})
+
 
 test('a tarball install checks its own channel.json and finds an update', async () => {
   await withChannel({

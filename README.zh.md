@@ -147,9 +147,12 @@ DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的
 | `<DSH 内置技能目录>` | `bundled`（默认开） |
 | `<项目根>/.dsh/skills` | `project-dsh` |
 | `<项目根>/.agents/skills` | `project-agents` |
-| `~/.dsh/skills` | `user-dsh` |
+| `$DSH_HOME/skills`（默认 `~/.dsh/skills`） | `user-dsh` |
 | `~/.agents/skills` | `user-agents` |
 | 预设里配置的 `customSkillDirs` | `custom` |
+
+`user-dsh` 这一根以 `$DSH_HOME` 为准，默认才是 `~/.dsh`；`~/.agents` 是多个 agent
+共用的配置根，不随 `DSH_HOME` 移动。
 
 如果某个技能在模型上下文里存在、面板里却没有，先确认它放在上面某个根里；再看宿主日志里有没有 `skill discovery failed`。
 
@@ -162,7 +165,8 @@ DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的
 - `run_code`、`context_control`、`structured_output` 受保护，永远不出现在列表里，也不能被关——`context_control` 本身就是把门控打开的入口，关掉它等于把自己锁在门外。
 - MCP 工具不单独列出（它们跟着服务器开关走）；`list_mcp_resources` 等资源工具同样由服务器开关控制。
 
-在 `~/.dsh/profiles/web/cordis.patch.yml` 里：
+在 `$DSH_HOME/profiles/web/cordis.patch.yml`（默认
+`~/.dsh/profiles/web/cordis.patch.yml`）里：
 
 ```yaml
 - id: context-control

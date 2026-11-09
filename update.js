@@ -36,7 +36,7 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join, isAbsolute } from 'node:path'
+import { basename, dirname, join, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const PACKAGE_NAME = 'dsh-context-control'
@@ -270,11 +270,31 @@ async function fetchJson(url, { timeout = FETCH_TIMEOUT_MS, headers = {}, fetch:
  * where the profile, the launcher and the channel are
  * ------------------------------------------------------------------ */
 
-/** DSH home the way the launcher resolves it. */
-export function resolveDshHome() {
-  const fromEnv = process.env.DSH_HOME
-  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') return fromEnv
-  return join(homedir(), '.dsh')
+/** Expand `~`, `~/x` and `~\x` against the OS home; other values pass through. */
+function expandHomePath(path) {
+  if (path === '~') return homedir()
+  if (path.startsWith('~/') || path.startsWith('~\\')) return join(homedir(), path.slice(2))
+  return path
+}
+
+/**
+ * DSH home the way the launcher resolves it.
+ *
+ * Same rules as `@deepseek-ai/dsh-home-paths` (deliberately reimplemented here
+ * rather than depended on, so this package stays a leaf plugin): `$DSH_HOME`
+ * wins over `<home>/.dsh`, but only after trimming — a blank override means
+ * "unset", never the current working directory — then `~`/`~/`/`~\` is
+ * expanded against the OS home and the result is made absolute. The trimmed
+ * value is what gets resolved, so `" D:/data "` and `~/data` both name the
+ * directory the launcher would use.
+ *
+ * @param env - environment mapping to read `DSH_HOME` from; `process.env` by default.
+ * @returns the normalized absolute DSH home.
+ */
+export function resolveDshHome(env = process.env) {
+  const fromEnv = env?.DSH_HOME
+  const configured = typeof fromEnv === 'string' ? fromEnv.trim() : ''
+  return resolve(expandHomePath(configured === '' ? join(homedir(), '.dsh') : configured))
 }
 
 /**
@@ -364,11 +384,25 @@ export function findProfile(ctx, name = PACKAGE_NAME) {
   }
   return undefined
 }
-/** Registry pnpm would use, as written in `.npmrc` / the environment. */
-export function resolveRegistry(fallback = 'https://registry.npmjs.org/') {
+/**
+ * Registry pnpm would use: `npm_config_registry`, then `registry=` from the
+ * user's `~/.npmrc`, then `fallback`.
+ *
+ * The npmrc read is best-effort on purpose. It is user-level npm configuration
+ * — `~/.npmrc` is read by npm/pnpm from the OS home, so it deliberately does
+ * not follow `$DSH_HOME` — and a machine that has no such file (or one the
+ * process may not read) must not turn every registry check into a failed one:
+ * the fallback registry is still a perfectly good answer.
+ */
+export function resolveRegistry(fallback = 'https://registry.npmjs.org/', { home = homedir() } = {}) {
   const fromEnv = process.env.npm_config_registry
   if (typeof fromEnv === 'string' && /^https?:\/\//.test(fromEnv)) return fromEnv
-  const npmrc = readFileSync(join(homedir(), '.npmrc'), 'utf8')
+  let npmrc
+  try {
+    npmrc = readFileSync(join(home, '.npmrc'), 'utf8')
+  } catch {
+    return fallback
+  }
   const match = /^\s*registry\s*=\s*(\S+)\s*$/m.exec(npmrc)
   if (match !== null && /^https?:\/\//.test(match[1])) return match[1]
   return fallback

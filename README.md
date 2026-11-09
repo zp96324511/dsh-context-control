@@ -138,9 +138,12 @@ show up in the panel and can be toggled (off by default):
 | DSH's bundled skill directory | `bundled` (on by default) |
 | `<project>/.dsh/skills` | `project-dsh` |
 | `<project>/.agents/skills` | `project-agents` |
-| `~/.dsh/skills` | `user-dsh` |
+| `$DSH_HOME/skills` (default `~/.dsh/skills`) | `user-dsh` |
 | `~/.agents/skills` | `user-agents` |
 | `customSkillDirs` from the preset | `custom` |
+
+The `user-dsh` root follows `$DSH_HOME` and only defaults to `~/.dsh`; the
+`~/.agents` root is shared agent configuration and does not move with it.
 
 If a skill is in the model's catalog but not in the panel, check that it lives
 in one of those roots, then look for `skill discovery failed` in the host log.
@@ -170,7 +173,8 @@ through `aria-description`.
 - MCP tools are not listed individually (they follow their server switch), and
   `list_mcp_resources` and friends follow the server switch too.
 
-In `~/.dsh/profiles/web/cordis.patch.yml`:
+In `$DSH_HOME/profiles/web/cordis.patch.yml` (default
+`~/.dsh/profiles/web/cordis.patch.yml`):
 
 ```yaml
 - id: context-control

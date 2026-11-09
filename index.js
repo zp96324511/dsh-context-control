@@ -45,19 +45,19 @@
  *   tool, and user invocation at once — the designed mechanism, no message
  *   rewriting. Disposing the fiber lifts the shadow. Discovery must read the
  *   catalog through the same `scope` the catalog and the `skill` tool use:
- *   project, user (`~/.dsh/skills`, `~/.agents/skills`) and custom roots are
- *   contributed by the filesystem provider mounted inside the agent preset, so
- *   an unscoped read sees only the global layer (bundled and host-registered
- *   skills).
+ *   project, user (`$DSH_HOME/skills` — `~/.dsh/skills` by default — and
+ *   `~/.agents/skills`) and custom roots are contributed by the filesystem
+ *   provider mounted inside the agent preset, so an unscoped read sees only
+ *   the global layer (bundled and host-registered skills).
  * - Both take effect on the next model request: the agent loop detects the
  *   changed tool surface and starts a new request series.
  *
  * Durable state: one `context-control` storage domain (json backend under
- * ~/.dsh/storages/), one record per project (the session's cwd) holding the
- * last chosen enabled sets. A new or resumed session in the same project
- * starts from that record; entries it does not mention fall back to the
- * configured defaults. MCP connections themselves stay connected — this
- * plugin controls model context, not processes.
+ * `$DSH_HOME/storages/`, `~/.dsh/storages/` by default), one record per project
+ * (the session's cwd) holding the last chosen enabled sets. A new or resumed
+ * session in the same project starts from that record; entries it does not
+ * mention fall back to the configured defaults. MCP connections themselves stay
+ * connected — this plugin controls model context, not processes.
  */
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -403,9 +403,9 @@ export async function apply(ctx, config) {
    * registry: project, user and custom roots are contributed by the filesystem
    * provider mounted inside the agent preset, so a read without `scope` sees
    * only the global layer (bundled and host-registered skills) and every
-   * `~/.agents/skills`, `~/.dsh/skills`, `<project>/.agents/skills` entry stays
-   * invisible. Pass the viewing agent, exactly as the `skill` tool and the
-   * catalog do.
+   * `~/.agents/skills`, `$DSH_HOME/skills` (default `~/.dsh/skills`),
+   * `<project>/.agents/skills` entry stays invisible. Pass the viewing agent,
+   * exactly as the `skill` tool and the catalog do.
    * @param cwd - project working directory; '' asks for the default view.
    * @param agent - viewing agent whose scope chain contributes preset skills; omitted for the global view.
    * @param into - optional name -> description sink, filled from the same read.

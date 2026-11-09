@@ -4,6 +4,25 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.6.1 — 2026-11-10
+
+- `resolveDshHome()` now resolves the home the way DSH itself does
+  (`@deepseek-ai/dsh-home-paths`): a whitespace-only `$DSH_HOME` means unset, a
+  leading `~`, `~/` or `~\` expands against the OS home, and the result is made
+  absolute before anything is joined onto it. `DSH_HOME=~/data` used to become
+  a literal directory named `~`; profile discovery, the update job record and
+  the installer's `DSH_HOME` all go through this helper, so they follow the
+  launcher instead of guessing.
+- Reading the user's `~/.npmrc` for the registry no longer throws when the file
+  is missing or unreadable: a failed read falls back to
+  `https://registry.npmjs.org/`, so a machine without a user-level npm config
+  keeps its registry channel instead of losing every version check. Precedence
+  is unchanged (`npm_config_registry` > `~/.npmrc` > default), and the file
+  stays user-level npm configuration — it does not follow `$DSH_HOME`.
+- Comments and both READMEs describe DSH's user data as `$DSH_HOME/...`
+  (default `~/.dsh`) instead of naming `~/.dsh` as the only location, so the
+  next change does not re-learn the hardcoded path this release removes.
+
 ## 0.6.0 — 2026-11-09
 
 - Remove the in-plugin host restart. A finished upgrade used to offer
