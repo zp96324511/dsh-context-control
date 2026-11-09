@@ -3,7 +3,7 @@
  * Serve `dist/` as an update channel — the local stand-in for whatever static
  * host the tarballs end up on (nginx, GitHub Pages, an object store).
  *
- * It exists so the whole install → check → upgrade → restart path can be
+ * It exists so the whole install → check → upgrade path can be
  * exercised without publishing anything: point a profile dependency at
  * `http://127.0.0.1:<port>/dsh-context-control-<version>.tgz`, and the plugin
  * derives `http://127.0.0.1:<port>/channel.json` from it by itself.

@@ -262,8 +262,8 @@ const DICT_ZH = {
   panel: '组件上下文', none: '无', mcp: 'MCP', skill: 'Skill', tool: '工具', official: '官方', custom: '自配',
   hint: '点击开关本会话的 MCP 服务器、技能与内置工具（下次请求生效，按项目记忆）', on: '已启用：', busy: '…',
   checkUpdate: '检查更新', checking: '检查中…', upToDate: '已是最新', available: '可升级',
-  upgrade: '一键升级', upgrading: '升级中…', upgraded: '已升级，需重启', restart: '重启服务',
-  restarting: '重启中…', reload: '刷新页面', failed: '升级失败', retry: '重试', details: '详情',
+  upgrade: '一键升级', upgrading: '升级中…', upgraded: '已升级',
+  upgradedHint: '已升级，重启 dsh web 后生效', reload: '刷新页面', failed: '升级失败', retry: '重试', details: '详情',
   hideDetails: '收起', updateUnavailable: '升级不可用', updateLocal: '本地安装，不提供在线升级',
   updateError: '检查失败', updateAvailableTip: '有新版本', compatible: '与当前 DSH 兼容',
   reloadHint: '已升级，刷新后生效',
@@ -275,7 +275,7 @@ const DICT_ZH = {
  * The client half talks to the host over `/plugins/dsh-context-control/...`.
  * `fetchMode` selects what the channel answers, so one mount can be driven
  * through every phase the footer has (current → unavailable → available →
- * upgrade → restart) without a host and without a network. */
+ * upgrade → restart hint) without a host and without a network. */
 const UPDATE_BASE = '/plugins/dsh-context-control';
 let fetchMode = 'current';
 const fetchCalls = [];
@@ -302,9 +302,7 @@ const fetchStub = async (url, init) => {
       });
   }
   if (path.startsWith('/update/upgrade')) return answer({ ok: true, job: { state: 'running', phase: 'install', log: '' } });
-  if (path.startsWith('/update/restart')) return answer({ ok: true, mode: 'respawn' });
   if (path.startsWith('/update/cancel')) return answer({ ok: true });
-  if (path.startsWith('/ping')) return answer({ ok: true, version: '0.3.0' });
   if (path.startsWith('/update')) {
     if (fetchMode === 'available') {
       return answer({
@@ -323,6 +321,13 @@ const fetchStub = async (url, init) => {
       return answer({
         ok: true, current: '0.4.0', latest: '0.4.0', hasUpdate: false,
         channel: { kind: 'manifest', origin: 'spec' }, restartRequired: false,
+      });
+    }
+    if (fetchMode === 'stale-install') {
+      // Files on disk are 0.3.0, but this host still runs the 0.2.1 module.
+      return answer({
+        ok: true, current: '0.3.0', latest: '0.3.0', hasUpdate: false, loaded: '0.2.1',
+        channel: { kind: 'registry', origin: 'spec' }, restartRequired: true, stale: true, hmr: false,
       });
     }
     return answer({
@@ -768,9 +773,13 @@ const fakeCtx = {
   await new Promise((resolve) => setTimeout(resolve, 1500));
   updateTree = mount({ type: Pill, props: { sessionId: 's1' } });
 
-  check('a finished install asks for the restart instead of claiming success', () => {
+  check('a finished install tells the user to restart dsh web, without offering to do it', () => {
     const action = actionOf(updateTree);
-    assert(textOf(action) === '重启服务', `action reads ${textOf(action)}`);
+    assert(textOf(action) === '检查更新', `action reads ${textOf(action)}`);
+    assert(textOf(updateTree).includes('重启 dsh web'), 'the restart hint is missing');
+    assert(!textOf(updateTree).includes('重启服务'), 'the old restart button is still rendered');
+    assert(!fetchCalls.some(([method, path]) => method === 'POST' && path.startsWith('/update/restart')),
+      'the client asked the host to restart itself');
     const toggle = find(updateTree, (element) => element.props?.['data-context-control'] === 'update-log-toggle')[0];
     assert(toggle !== undefined, 'no log toggle after an install ran');
   });
@@ -782,19 +791,6 @@ const fakeCtx = {
     const log = find(updateTree, (element) => element.props?.['data-context-control'] === 'update-log')[0];
     assert(log !== undefined, 'no log block after toggling');
     assert(textOf(log).includes('installed 0.3.0'), `log reads "${textOf(log)}"`);
-  });
-
-  actionOf(updateTree).props.onClick();
-  /* The liveness poll starts after a short grace period that lets the host
-   * actually go down first — a ping answered by the process that is about to
-   * exit would reload the page into a dying server. */
-  await new Promise((resolve) => setTimeout(resolve, 1200));
-
-  check('restart asks the host to come back and waits for it', () => {
-    assert(fetchCalls.some(([method, path]) => method === 'POST' && path.startsWith('/update/restart')),
-      'no restart POST');
-    assert(fetchCalls.some(([method, path]) => method === 'GET' && path.startsWith('/ping')),
-      'the page did not wait for the host to answer again');
   });
 
   fetchMode = 'current';
@@ -815,8 +811,9 @@ const fakeCtx = {
   staleAnchor.children[0].props.onClick();
   await new Promise((resolve) => setTimeout(resolve, 40));
   staleTree = mount({ type: Pill, props: { sessionId: 's1' } });
-  /* The check button is always present, so a page in any phase can re-ask. */
-  find(staleTree, (element) => element.props?.['data-context-control'] === 'update-check')[0].props.onClick();
+  /* After a finished install the action button is the check request (and the
+   * ⟳ is hidden to avoid a duplicate), so re-ask through it. */
+  actionOf(staleTree).props.onClick();
   await new Promise((resolve) => setTimeout(resolve, 40));
   staleTree = mount({ type: Pill, props: { sessionId: 's1' } });
 
@@ -876,6 +873,33 @@ const fakeCtx = {
     assert(action.props['data-context-control-phase'] === 'error',
       `auto check left the row at ${action.props['data-context-control-phase']}`);
     assert(textOf(action) === '重试', `action reads ${textOf(action)}`);
+  });
+
+  /* A page opened after the install but before the host restart: the files
+   * name 0.3.0 while the running module is still 0.2.1. That is a restart
+   * hint, not "up to date", and not a page reload — a reload cannot load
+   * host-side code. */
+  fetchMode = 'stale-install';
+  instances = new Map();
+  nodeCache.clear();
+  const InstalledPill = await reloadPage();
+  let installedTree = mount({ type: InstalledPill, props: { sessionId: 's1' } });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  installedTree = mount({ type: InstalledPill, props: { sessionId: 's1' } });
+  const installedAnchor = find(installedTree, (element) => element.props?.['data-context-control'] === 'anchor')[0];
+  installedAnchor.children[0].props.onClick();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  installedTree = mount({ type: InstalledPill, props: { sessionId: 's1' } });
+
+  check('an install the host has not loaded yet reads as a restart hint, not as current', () => {
+    const action = actionOf(installedTree);
+    assert(action.props['data-context-control-phase'] === 'upgraded',
+      `phase is ${action.props['data-context-control-phase']}`);
+    assert(textOf(installedTree).includes('重启 dsh web'), 'the restart hint is missing');
+    assert(!textOf(installedTree).includes('已是最新'), 'a stale module rendered as up to date');
+    assert(textOf(action) === '检查更新', `action reads ${textOf(action)} (a reload cannot load host code)`);
+    assert(!fetchCalls.some(([method, path]) => method === 'POST' && path.startsWith('/update/restart')),
+      'the client asked the host to restart itself');
   });
 
   console.log(results.join('\n'));

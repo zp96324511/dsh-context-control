@@ -330,7 +330,6 @@ function fakeUpdater(overrides = {}) {
     check: async () => ({ ok: true, current: CURRENT, latest: NEXT, hasUpdate: true, canUpgrade: true }),
     upgrade: async ({ version } = {}) => ({ ok: true, job: { id: 'job-1', state: 'running', to: version ?? NEXT } }),
     cancel: () => ({ ok: true }),
-    restart: () => ({ ok: true, mode: 'respawn' }),
     jobView: () => ({ state: 'idle' }),
     ...overrides,
   }
@@ -381,8 +380,9 @@ test('the update route table answers JSON and 404s anything else', async () => {
   const job = await call(handle, 'GET', `${prefix}/update/job`)
   assert.equal(job.body.state, 'idle')
 
+  /* Restarting the host is not the plugin's job: the route does not exist. */
   const restart = await call(handle, 'POST', `${prefix}/update/restart`)
-  assert.equal(restart.body.mode, 'respawn')
+  assert.equal(restart.status, 404)
 
   const missing = await call(handle, 'GET', `${prefix}/nope`)
   assert.equal(missing.status, 404)
@@ -457,6 +457,8 @@ test('an upgrade runs the documented install and reports what landed', async () 
       assert.equal(view.exitCode, 0)
       assert.match(view.log, /dsh plugin --profile web add/, 'the log does not show the command it ran')
       assert.match(view.log, /installed 99\.0\.0/)
+      assert.match(view.log, /restart dsh web to apply/, 'the log must tell the user to restart the host')
+      assert.equal(view.restartRequired, true)
 
       // The command is the one a user would type, in the profile directory.
       assert.equal(spawned.length, 1)

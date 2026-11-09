@@ -1,6 +1,6 @@
 # dsh-context-control
 
-Session-scoped visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on for that session, and each row shows what the resource does. The choice is remembered per project. The plugin also **carries its own update channel**: it can tell you it is behind, upgrade itself in one click, and bring the host back.
+Session-scoped visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on for that session, and each row shows what the resource does. The choice is remembered per project. The plugin also **carries its own update channel**: it can tell you it is behind and upgrade itself in one click. After an upgrade it only tells you to restart `dsh web` — how the host was started is the user's business, not the plugin's.
 
 English | [中文](README.zh.md)
 
@@ -45,7 +45,7 @@ dsh plugin --profile web add http://<host>/dsh-context-control/dsh-context-contr
 
 No configuration is needed to find the channel: the plugin takes the directory of the tarball it was installed from and reads `channel.json` beside it. Publish `dist/` anywhere and both install and upgrade work.
 
-Restart `dsh web` once after installing; upgrades after that are handled by the plugin itself.
+Restart `dsh web` once after installing. Later upgrades install the files themselves; the panel then tells you to restart the host.
 
 > To pin a specific version, install the tagged asset
 > (`.../releases/download/v0.4.3/dsh-context-control.tgz`). Re-installing the *same*
@@ -56,12 +56,14 @@ Restart `dsh web` once after installing; upgrades after that are handled by the 
 
 ### Where
 
-Open the "Context" pill left of any composer: the popover's footer shows the installed version and one button that does whatever the current phase needs.
+Open the "Components" pill left of any composer: the popover's footer shows the installed version and one button that does whatever the current phase needs.
 
 - idle: `v0.4.0 · up to date · [Check for updates]`
 - behind: an `↑` badge on the pill, `v0.4.0 → v0.4.1 · [Upgrade]`
 - running: `[Upgrading…]` plus `[Details]` with pnpm's live output
-- finished: `[Restart]` (the host does not use HMR) or `[Reload]` (the new code is already live)
+- finished: `Upgraded — restart dsh web to apply` (or `[Reload]` when HMR already picked the new code up)
+
+There is deliberately **no restart control**: the host may have been started with arguments or a supervisor the plugin cannot reconstruct, so re-executing a guessed command line could bring up the wrong host or none at all. Restarting stays with whoever started it.
 
 Every pane on the machine shares this state: which version is installed is a fact about the host, not about a session.
 
@@ -79,11 +81,11 @@ It never uninstalls first — that leaves a profile without the plugin the momen
    `<spec>` is `name@version` for a registry or the new tarball URL for a tarball channel. That inherits everything the manager already guarantees: the profile write lock, the `engines.dsh` pre-check, and a snapshot/restore of `package.json` and `pnpm-lock.yaml` on failure.
 
 3. **Verify** by reading the installed `node_modules/<name>/package.json`. A zero exit code is not proof of the version you asked for — supply-chain policies such as `minimumReleaseAge` can install an older one — so a mismatch is reported.
-4. **Restart**: the host exits, a detached helper waits for the old process to die and its port to be released, then starts the same command line again (`respawn.cjs`). Without systemd, pm2 or a Windows service, that is the difference between "one click" and a dead GUI.
+4. **Tell the user to restart**: the upgrade stops here. The host is not exited and not relaunched; the row says "Upgraded — restart dsh web to apply", and you restart it the way you started it.
 
-With HMR the restart can be unnecessary: the plugin compares the version its module was loaded from with the version on disk and asks for a restart only when the code really changed; otherwise it offers a page reload.
+With HMR the restart is usually unnecessary: the plugin compares the version its module was loaded from with the version on disk and, when the new code is already live, offers a page reload instead.
 
-### The outcome survives a reload
+### The outcome survives a plugin reload
 
 An upgrade often replaces the plugin itself. The job record lives in `$DSH_HOME/storages/dsh-context-control-update.json` and is read back by the new instance; a record still marked `running` (the install was interrupted by the reload) is reported as failed instead of spinning forever.
 
@@ -185,10 +187,6 @@ In `~/.dsh/profiles/web/cordis.patch.yml`:
       # upgradeTimeoutMs: 900000
       # launcher: <path to the dsh entry point, discovered by default>
       # runtimeVersion: 0.2.1-rc.2   # used for the engines.dsh check when discovery fails
-      restart:
-        mode: respawn      # respawn | exit (a supervisor restarts) | none
-        port: 10550        # defaults to the --port on the command line
-        logFile: C:\Users\you\.dsh\logs\dsh-web-respawn.log
 ```
 
 A `link:` / `file:` install is **not** upgraded in place (that would overwrite the checkout); the panel says "Updates unavailable" unless `manifestUrl`, `github` or `registry` is configured explicitly.
@@ -200,7 +198,7 @@ A `link:` / `file:` install is **not** upgraded in place (that would overwrite t
 | `Check failed` / `cannot tell which channel` | The channel is unreachable, or the install came from a git spec. Configure `update.manifestUrl`. |
 | `Updates unavailable` | `link:` / `file:` install. Publish and install a tarball URL, or configure a channel. |
 | Upgraded but the version did not change | Read pnpm's output under `[Details]`; `minimumReleaseAge` defers a fresh release. |
-| The host did not come back | Check `restart.logFile`; use `restart.mode: exit` with your own supervisor. |
+| The row still says to restart | The host still runs the old code: restart `dsh web` **the way you started it**. The plugin deliberately does not do it — a guessed command line could miss your `--profile`, `--port` or environment. |
 | Pin an older version | `dsh plugin --profile web add http://<host>/…/dsh-context-control-0.3.5.tgz` — `channel.json` keeps old versions for this. |
 | Back to a local checkout | `dsh plugin --profile web add link:C:/path/to/dsh-context-control`, then recreate the `node_modules` junction (below). |
 
@@ -215,8 +213,8 @@ mklink /J "C:\path\to\dsh-context-control\node_modules" "C:\Users\<you>\AppData\
 (Recreate it after `nvm use` switches Node.)
 
 ```pwsh
-npm run check        # manifest guard + node --check + 20 update tests + host gating regression + 32 client regression tests
+npm run check        # manifest guard + node --check + 21 update tests + host gating regression + 35 client regression tests
 npm test             # the two test suites only
 ```
 
-The client suite is offline: `test/client-harness.cjs` ships a mini React runtime, a stub gateway and a fake DOM, and drives the panel, keyboard navigation, multi-pane isolation and every phase of the update button (current → unavailable → available → upgrading → restart → waiting for the host).
+The client suite is offline: `test/client-harness.cjs` ships a mini React runtime, a stub gateway and a fake DOM, and drives the panel, keyboard navigation, multi-pane isolation and every phase of the update button (current → unavailable → available → upgrading → restart hint).

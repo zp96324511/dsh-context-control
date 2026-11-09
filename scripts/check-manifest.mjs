@@ -98,7 +98,7 @@ for (const [subpath, target] of Object.entries(pkg.exports ?? {})) {
 }
 
 /* Every top-level file that must ship, beyond what exports mentions. */
-for (const required of ['update.js', 'respawn.cjs']) {
+for (const required of ['update.js']) {
   if (!exists(required)) fail('package.json', `${required} is missing — the update channel cannot work without it`)
   else if (!matchesPublished(required)) fail('package.json', `${required} is not in files — an installed copy could not upgrade itself`)
   else ok(`${required} published`)
@@ -137,13 +137,10 @@ if (pluginIdHost === null || pluginIdClient === null) {
 if (!/createUpdateRoutes|createUpdater/.test(hostSource)) {
   fail('index.js', 'the update channel is not mounted')
 }
-for (const asset of ['update.js', 'respawn.cjs']) {
+for (const asset of ['update.js']) {
   const source = exists(asset) ? readFileSync(join(root, asset), 'utf8') : ''
-  if (asset === 'update.js' && !/export function installSpecFor/.test(source)) {
+  if (!/export function installSpecFor/.test(source)) {
     fail('update.js', 'installSpecFor is not exported — the tests and the host rely on it')
-  }
-  if (asset === 'respawn.cjs' && !/process\.kill\(candidate, 0\)/.test(source)) {
-    fail('respawn.cjs', 'the PID liveness probe is missing — the helper would start before the old process exits')
   }
 }
 
@@ -158,7 +155,7 @@ if (stray.length > 0) fail('tree', `stray backup files would be published: ${str
  * runs in `npm run check`; this only asserts they are listed there. */
 const checkScript = String(pkg.scripts?.check ?? '')
 const testScript = String(pkg.scripts?.test ?? '')
-for (const script of ['index.js', 'update.js', 'respawn.cjs', 'client.js']) {
+for (const script of ['index.js', 'update.js', 'client.js']) {
   if (!checkScript.includes(`node --check ${script}`)) fail('package.json', `scripts.check does not syntax-check ${script}`)
 }
 if (!/test\/update\.test\.mjs/.test(testScript)) fail('package.json', 'scripts.test does not run the host tests')

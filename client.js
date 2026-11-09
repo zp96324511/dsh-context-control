@@ -179,9 +179,8 @@ window.__ModuleLoader__.load({
         available: '可升级',
         upgrade: '一键升级',
         upgrading: '升级中…',
-        upgraded: '已升级，需重启',
-        restart: '重启服务',
-        restarting: '重启中…',
+        upgraded: '已升级',
+        upgradedHint: '已升级，重启 dsh web 后生效',
         reload: '刷新页面',
         failed: '升级失败',
         retry: '重试',
@@ -213,9 +212,8 @@ window.__ModuleLoader__.load({
         available: 'Update',
         upgrade: 'Upgrade',
         upgrading: 'Upgrading…',
-        upgraded: 'Upgraded — restart',
-        restart: 'Restart',
-        restarting: 'Restarting…',
+        upgraded: 'Upgraded',
+        upgradedHint: 'Upgraded — restart dsh web to apply',
         reload: 'Reload',
         failed: 'Upgrade failed',
         retry: 'Retry',
@@ -495,7 +493,8 @@ window.__ModuleLoader__.load({
          * One row in the popover about this plugin itself: which version is
          * installed, whether the channel it was installed from has a newer
          * one, and one button that does whatever the current phase needs
-         * (check → upgrade → restart → reload).
+         * (check → upgrade → reload). Restarting the host is deliberately not
+         * offered: the plugin does not know how the user started it.
          *
          * This state is deliberately shared by every pane, unlike the gating
          * toggles: "which version is installed" is a property of the host, not
@@ -512,8 +511,6 @@ window.__ModuleLoader__.load({
         })()
         const UPDATE_POLL_MS = 1200
         const UPDATE_POLL_LIMIT_MS = 20 * 60 * 1000
-        const REOPEN_POLL_MS = 1000
-        const REOPEN_LIMIT_MS = 120 * 1000
         const RECHECK_MS = 30 * 60 * 1000
 
         function createUpdateStore() {
@@ -590,9 +587,16 @@ window.__ModuleLoader__.load({
               return
             }
             if (bootVersion === undefined) bootVersion = info.current
-            const reloadNeeded = bootVersion !== undefined && info.current !== bootVersion
+            /* A page that outlived a restart of the host sees a different
+             * version from the one it booted with. A page that outlived only
+             * the *install* sees the same split while the module on disk is
+             * not the module the host loaded (`stale`): that is a restart
+             * hint, not a page reload. */
+            const reloadNeeded = bootVersion !== undefined && info.current !== bootVersion && info.stale !== true
             if (reloadNeeded) {
               updateStore.set({ phase: 'reload', info, error: undefined, job: updateStore.get().job })
+            } else if (info?.stale === true) {
+              updateStore.set({ phase: 'upgraded', info, error: undefined, job: updateStore.get().job })
             } else if (info?.channel?.kind === 'local' || info?.channel?.kind === 'git') {
               updateStore.set({ phase: 'unavailable', info, error: info.error, job: undefined })
             } else if (info?.error !== undefined && info?.hasUpdate !== true) {
@@ -633,9 +637,7 @@ window.__ModuleLoader__.load({
                 return
               }
               if (job?.state === 'done') {
-                const needsRestart = job.restartRequired !== false
                 updateStore.set({ phase: 'upgraded', error: job.error, info: { ...(updateStore.get().info ?? {}), current: job.installed ?? updateStore.get().info?.current } })
-                void needsRestart
                 return
               }
               updateStore.set({ phase: 'error', error: job?.error ?? 'the install stopped' })
@@ -665,36 +667,9 @@ window.__ModuleLoader__.load({
           }
         }
 
-        /* After a restart the old page is still running old code; poll the
-         * liveness route until the host answers again, then reload. Polling a
-         * route of this very plugin is also the proof the new build mounted. */
-        async function restartHost() {
-          updateStore.set({ phase: 'restarting', error: undefined })
-          try {
-            await updateRequest('/update/restart', { method: 'POST' })
-          } catch (cause) {
-            /* The connection dying is the expected outcome here. */
-            void cause
-          }
-          const deadline = Date.now() + REOPEN_LIMIT_MS
-          const tick = async () => {
-            try {
-              const pong = await updateRequest('/ping')
-              if (pong?.ok === true) {
-                if (typeof location !== 'undefined' && typeof location.reload === 'function') location.reload()
-                else updateStore.set({ phase: 'upgraded' })
-                return
-              }
-            } catch { /* still down: keep waiting */ }
-            if (Date.now() > deadline) {
-              updateStore.set({ phase: 'error', error: 'the host did not come back; restart it from the terminal' })
-              return
-            }
-            setTimeout(() => { void tick() }, REOPEN_POLL_MS)
-          }
-          setTimeout(() => { void tick() }, REOPEN_POLL_MS)
-        }
-
+        /* The old page keeps running old code until the *user* restarts the
+         * host; the row only says so. Reloading the page is a separate act
+         * (only useful once the host is back with the new module). */
         function reloadPage() {
           if (typeof location !== 'undefined' && typeof location.reload === 'function') location.reload()
         }
@@ -736,17 +711,18 @@ window.__ModuleLoader__.load({
             case 'upgrading':
               return { label: t('upgrading'), busy: true }
             case 'upgraded': {
-              /* The job's own verdict wins: only the host knows whether the new
-               * code is already live (HMR) or still needs the restart. */
+              /* Only the host knows whether the new code is already live (HMR)
+               * or whether the user still has to restart `dsh web`. There is
+               * no restart control here on purpose: the host may have been
+               * started with arguments a plugin cannot reconstruct, so the
+               * note carries the hint and the button is just a re-check. */
               const needsRestart = update.job !== undefined
                 ? update.job.restartRequired !== false
                 : info?.restartRequired !== false
               return needsRestart
-                ? { label: t('restart'), onClick: () => { void restartHost() } }
+                ? { label: t('checkUpdate'), onClick: () => { void refreshUpdate({ force: true }) } }
                 : { label: t('reload'), onClick: reloadPage }
             }
-            case 'restarting':
-              return { label: t('restarting'), busy: true }
             case 'reload':
               return { label: t('reload'), onClick: reloadPage }
             case 'unavailable':
@@ -766,12 +742,17 @@ window.__ModuleLoader__.load({
         function updateNote(update) {
           const info = update.info
           if (update.phase === 'available') return `→ v${info?.latest ?? '?'}${info?.compatible === false ? ` · ${t('incompatible')}` : ''}`
-          if (update.phase === 'upgraded') return `v${info?.current ?? '?'}`
+          if (update.phase === 'upgraded') {
+            const needsRestart = update.job !== undefined
+              ? update.job.restartRequired !== false
+              : info?.restartRequired !== false
+            return needsRestart ? t('upgradedHint') : t('reloadHint')
+          }
           if (update.phase === 'reload') return `v${info?.current ?? '?'} · ${t('reloadHint')}`
           if (update.phase === 'current') return t('upToDate')
           if (update.phase === 'unavailable') return t('updateLocal')
           if (update.phase === 'error') return update.error ?? t('updateError')
-          if (update.phase === 'upgrading' || update.phase === 'restarting') return update.job?.phase === 'verify' ? t('upgraded') : ''
+          if (update.phase === 'upgrading') return update.job?.phase === 'verify' ? t('upgraded') : ''
           return ''
         }
 
@@ -784,8 +765,8 @@ window.__ModuleLoader__.load({
           const phase = update.phase
           /* In idle/current the action button below *is* the check request,
            * so a ⟳ beside it would be the same button twice. In every other
-           * phase (busy, upgrade, restart, error) the ⟳ is the one re-ask a
-           * stale tab cannot make through that button, so it stays there —
+           * phase (busy, upgrade, upgrade hint, error) the ⟳ is the one re-ask
+           * a stale tab cannot make through that button, so it stays there —
            * the row offers exactly one check action at a time. */
           const checkIsTheAction = action.busy !== true && action.label === t('checkUpdate')
           const noteStyle = phase === 'error'

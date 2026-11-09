@@ -2,11 +2,10 @@
  * dsh-context-control — update channel (host half).
  *
  * Turns an installed copy into one that can tell you it is behind and move
- * itself forward: a version check against the channel it was installed from,
- * a one-click upgrade that runs the install the way a user would, and a
- * restart that brings the host back by itself.
+ * itself forward: a version check against the channel it was installed from
+ * and a one-click upgrade that runs the install the way a user would.
  *
- * The three pieces are deliberately separate, because each has a different
+ * The two pieces are deliberately separate, because each has a different
  * failure mode:
  *
  * 1. **Check** — read-only. It asks the channel the *profile dependency was
@@ -22,11 +21,13 @@
  *    that removed the running plugin before installing the new one would go
  *    dark on any failure, and `pluginManager.installBundle` refuses an
  *    already-installed package for exactly that reason.
- * 3. **Restart** — the host exits; a detached helper waits for the old
- *    process to die and its port to be released, then starts the same command
- *    line again. Without a supervisor (systemd `Restart=always`, pm2, a
- *    Windows service) an exit would otherwise leave the user with a dead GUI,
- *    which is the one outcome an in-product upgrade button must never cause.
+ *
+ * The upgrade deliberately stops after verifying the install. Restarting the
+ * host is *not* a plugin's job: the process was started by the user and its
+ * command line may carry arguments (profile, port, env, a supervisor wrapper)
+ * that a plugin cannot reconstruct. Re-executing a guessed command line can
+ * bring up the wrong host, or no host at all, so the UI only tells the user
+ * that `dsh web` has to be restarted.
  *
  * Nothing here is allowed to break the gating feature: every route answers
  * JSON, and the whole module is mounted inside a try/catch by `index.js`.
@@ -57,7 +58,6 @@ const LOG_LIMIT = 48 * 1024
 const CHECK_TTL_MS = 6 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 8000
 const UPGRADE_TIMEOUT_MS = 15 * 60 * 1000
-const DEFAULT_WEB_PORT = 10550
 
 /* ------------------------------------------------------------------ *
  * versions
@@ -310,17 +310,6 @@ export function readProfileDependency(profileDir, name = PACKAGE_NAME) {
   return { spec, ...classifySpec(spec), manifest }
 }
 
-/** The web port this process serves, for the restart port-release wait. */
-function resolvePort(argv) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index]
-    if (argument === '--port' && index + 1 < argv.length) return Number(argv[index + 1]) || undefined
-    const inline = /^--port=(.+)$/.exec(argument)
-    if (inline !== null) return Number(inline[1]) || undefined
-  }
-  return undefined
-}
-
 /** Launcher script of the running DSH (`.../@deepseek-ai/dsh/lib/bin.js`). */
 export function resolveLauncher() {
   const fromEnv = process.env.DSH_BIN
@@ -529,19 +518,14 @@ export function installSpecFor(channel, version, info = {}) {
 }
 
 /**
- * Build the updater: a cached version check, a single in-flight upgrade job,
- * and the restart hand-off.
+ * Build the updater: a cached version check and a single in-flight upgrade
+ * job.
  *
  * @param options.ctx Host context (used only for `profileContext`).
  * @param options.config Plugin config; `config.update` is read on every call so
  *   a settings change takes effect without a reload.
- * @param options.logger Sink for warnings (`logger.warn`-shaped).
  */
-export function createUpdater({ ctx, config, logger, spawn: spawnProcess = spawn, fetch: fetchImpl } = {}) {
-  const warn = (message) => {
-    try { logger?.(message) } catch { /* a broken logger must not break the route */ }
-  }
-
+export function createUpdater({ ctx, config, spawn: spawnProcess = spawn, fetch: fetchImpl } = {}) {
   const state = {
     /** `{ at, result }` — the last successful or failed check, cached. */
     check: undefined,
@@ -656,11 +640,11 @@ export function createUpdater({ ctx, config, logger, spawn: spawnProcess = spawn
       /** The version whose code is running, which may lag the file on disk. */
       loaded: LOADED_VERSION,
       /**
-       * A restart is needed unless the new code is provably live: HMR may have
-       * swapped the plugin, but only the module itself can tell (its loaded
-       * version), so an HMR host and a stale module still ask for a restart.
+       * Whether the files on disk already name a version this host did not
+       * load: the upgrade happened, the host still runs the old code, and the
+       * user has to restart `dsh web` (the plugin never does that itself).
        */
-      restartRequired: stale() || !hmr(),
+      restartRequired: stale(),
       stale: stale(),
     }
     state.check = { at: Date.now(), result }
@@ -858,12 +842,13 @@ export function createUpdater({ ctx, config, logger, spawn: spawnProcess = spawn
       job.installed = typeof installedManifest?.version === 'string' ? installedManifest.version : undefined
       job.state = 'done'
       // The install replaced files, so the running module is stale unless HMR
-      // re-composed it before this point; `stale()` is the honest answer.
+      // re-composed it before this point. A host without HMR cannot pick the
+      // new code up at all, so it always needs the restart.
       job.restartRequired = stale() || !hmr()
       if (job.installed !== undefined && job.installed !== to) {
         job.error = `installed ${job.installed}, requested ${to}`
       }
-      append(job, 'system', `\n[done] installed ${job.installed ?? 'unknown'}${job.restartRequired ? ' — restart required' : ''}\n`)
+      append(job, 'system', `\n[done] installed ${job.installed ?? 'unknown'}${job.restartRequired ? ' — restart dsh web to apply' : ''}\n`)
       // The cached check described the old install, and the profile manifest
       // now names the new spec: drop both.
       state.check = undefined
@@ -896,57 +881,6 @@ export function createUpdater({ ctx, config, logger, spawn: spawnProcess = spawn
     return () => { job.listeners.delete(listener) }
   }
 
-  /**
-   * Restart the host.
-   *
-   * `respawn` (the default) starts a detached helper that waits for this
-   * process to exit and the port to be released, then re-executes the same
-   * command line. `exit` is for hosts a supervisor already restarts. `none`
-   * only reports what the user has to do.
-   */
-  function restart() {
-    const restartConfig = updateConfig().restart ?? {}
-    const mode = typeof restartConfig.mode === 'string' ? restartConfig.mode : 'respawn'
-    if (mode === 'none') return { ok: true, mode, restarted: false }
-    if (mode === 'exit') {
-      setTimeout(() => process.exit(0), 150)
-      return { ok: true, mode, restarted: true }
-    }
-    const cli = launcher()
-    if (cli === undefined) {
-      setTimeout(() => process.exit(0), 150)
-      return { ok: true, mode: 'exit', restarted: true, warning: 'launcher not found: exited without a respawn helper' }
-    }
-    const helper = join(HERE, 'respawn.cjs')
-    if (!existsSync(helper)) {
-      setTimeout(() => process.exit(0), 150)
-      return { ok: true, mode: 'exit', restarted: true, warning: 'respawn.cjs missing from the package: exited without a helper' }
-    }
-    const payload = {
-      pid: process.pid,
-      argv: [process.execPath, cli, ...process.argv.slice(2)],
-      cwd: process.cwd(),
-      env: { ...process.env },
-      port: resolvePort(process.argv) ?? Number(restartConfig.port ?? DEFAULT_WEB_PORT) ?? DEFAULT_WEB_PORT,
-      log: restartConfig.logFile ?? join(resolveDshHome(), 'logs', `${basename(process.argv[1] ?? 'dsh').replace(/\.js$/, '')}-respawn.log`),
-    }
-    try {
-      const child = spawnProcess(process.execPath, [helper, Buffer.from(JSON.stringify(payload)).toString('base64')], {
-        detached: true,
-        windowsHide: true,
-        stdio: 'ignore',
-        cwd: payload.cwd,
-        env: process.env,
-      })
-      child.unref()
-    } catch (error) {
-      warn(`dsh-context-control: respawn helper failed to start: ${String(error)}`)
-      return { ok: false, mode: 'respawn', restarted: true, error: String(error?.message ?? error) }
-    }
-    setTimeout(() => process.exit(0), 250)
-    return { ok: true, mode: 'respawn', restarted: true, log: payload.log }
-  }
-
   /** Stop a running install (best effort; pnpm children are terminated by the CLI). */
   function cancel() {
     const job = state.job
@@ -967,7 +901,7 @@ export function createUpdater({ ctx, config, logger, spawn: spawnProcess = spawn
     if (state.job !== undefined) state.job.listeners.clear()
   }
 
-  return { version, check, upgrade, restart, cancel, subscribe, jobView: () => jobView(state.job), dispose, profile, channel }
+  return { version, check, upgrade, cancel, subscribe, jobView: () => jobView(state.job), dispose, profile, channel }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1032,11 +966,6 @@ export function createUpdateRoutes(updater, { prefix = '/plugins/dsh-context-con
     }
     if (route === '/update/cancel' && req.method === 'POST') {
       reply(res, 200, updater.cancel())
-      return true
-    }
-    if (route === '/update/restart' && req.method === 'POST') {
-      const result = updater.restart()
-      reply(res, result.ok ? 200 : 500, result)
       return true
     }
     reply(res, 404, { ok: false, error: `no route ${req.method} ${route}` })

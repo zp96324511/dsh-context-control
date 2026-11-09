@@ -30,7 +30,7 @@ jobs:
         run: |
           TARBALL=$(node -p "require('./pack.json')[0].filename")
           tar -tzf "$TARBALL" | sort
-          for required in package/index.js package/client.js package/update.js package/respawn.cjs package/cordis.patch.yml; do
+          for required in package/index.js package/client.js package/update.js package/cordis.patch.yml; do
             tar -tzf "$TARBALL" | grep -qx "$required" || { echo "::error::$required is missing from the tarball"; exit 1; }
           done
 

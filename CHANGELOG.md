@@ -4,6 +4,23 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.6.0 — 2026-11-09
+
+- Remove the in-plugin host restart. A finished upgrade used to offer
+  `[Restart]`, which asked the host to exit while a detached helper
+  (`respawn.cjs`) re-ran a reconstructed command line. That is not a plugin's
+  decision to make: the host may have been started with a profile, a port,
+  environment variables or a supervisor wrapper that the plugin cannot
+  reconstruct, so the guessed relaunch could come up wrong or not at all. The
+  upgrade now stops after it verifies the installed version, and the row only
+  says `已升级，重启 dsh web 后生效` / "Upgraded — restart dsh web to apply".
+  The `/update/restart` route, the `restart` config block and `respawn.cjs`
+  are gone.
+- A check that finds files newer than the module this host loaded now reports
+  the same restart hint instead of offering a page reload — a page reload
+  cannot load host-side code. `[Reload]` is offered only when the host really
+  restarted and serves a version the page did not boot with.
+
 ## 0.5.2 — 2026-11-07
 
 - Fix: the popover's footer version row showed two check-for-updates buttons in

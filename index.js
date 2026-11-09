@@ -122,15 +122,6 @@ export const Config = z.object({
     checkIntervalMs: z.number(),
     /** Upper bound for one upgrade install, in milliseconds. */
     upgradeTimeoutMs: z.number(),
-    /** How the host comes back after an upgrade. */
-    restart: z.object({
-      /** `respawn` (a detached helper re-runs the same command), `exit`, `none`. */
-      mode: z.string(),
-      /** Port to wait on before the helper starts the new process. */
-      port: z.number(),
-      /** Where the respawned host writes its own output. */
-      logFile: z.string(),
-    }).default({}),
   }).default({}),
 }).default({
   defaultOn: [], defaultOff: [], officialServers: [],
@@ -958,7 +949,8 @@ export async function apply(ctx, config) {
   for (const agent of ctx.agents.list()) void attach(agent)
 
   /* ---- Update channel (optional, never fatal) ----
-   * An HTTP surface for the popover's version row: check, upgrade, restart.
+   * An HTTP surface for the popover's version row: check and upgrade. The
+   * plugin never restarts the host — the UI only tells the user to do it.
    * `webServer` is injected separately because a non-web host has no such
    * service, and everything here is wrapped because a broken update channel
    * must not take the gating feature down with it — that failure mode (a
@@ -968,7 +960,7 @@ export async function apply(ctx, config) {
     const webServer = scoped.get('webServer')
     if (webServer === undefined) return
     try {
-      updater = createUpdater({ ctx, config: cfg(), logger: (message) => warn(ctx, message) })
+      updater = createUpdater({ ctx, config: cfg() })
       const handle = createUpdateRoutes(updater)
       const disposers = []
       const prefix = '/plugins/dsh-context-control'

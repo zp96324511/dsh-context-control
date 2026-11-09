@@ -1,6 +1,6 @@
 # dsh-context-control
 
-会话级的 MCP / 技能 / 内置工具可见性门控：新会话默认精简（官方条目开、用户自配的关），对话中通过 `context_control` 工具或输入框左侧的「组件上下文」胶囊按需开关；每个条目都带一行说明，胶囊显示三类合计的启用数量。开关状态按项目持久化。**自带在线安装与升级通道**：能从它被安装的那个渠道查新版本，并在面板里一键升级、自动重启。
+会话级的 MCP / 技能 / 内置工具可见性门控：新会话默认精简（官方条目开、用户自配的关），对话中通过 `context_control` 工具或输入框左侧的「组件上下文」胶囊按需开关；每个条目都带一行说明，胶囊显示三类合计的启用数量。开关状态按项目持久化。**自带在线安装与升级通道**：能从它被安装的那个渠道查新版本，并在面板里一键升级；装完只提示你重启 `dsh web`——宿主的启动参数可能只有你知道，插件不会替你重启。
 
 [English](README.md) | 中文
 
@@ -45,7 +45,7 @@ dsh plugin --profile web add http://<你的站>/dsh-context-control/dsh-context-
 
 插件**不需要额外配置就能找到升级渠道**：它取自己依赖的那条 tarball URL 的目录，去读同目录的 `channel.json`。把 `dist/` 整个丢到任何静态服务器上，安装和升级就都通了。
 
-装完重启一次 `dsh web`（第一次加载需要重启；之后的升级由插件自己处理，见下）。
+装完重启一次 `dsh web`（第一次加载需要重启）。之后的升级由插件安装好文件，面板会提示你重启 `dsh web`。
 
 > 想手动换到某个具体版本，用带 tag 的地址：`.../releases/download/v0.4.3/dsh-context-control.tgz`。重复安装**同一个** `releases/latest/download/...` 地址会被 pnpm 视为 spec 未变而跳过（面板里的一键升级不受影响，它每次都用 channel.json 给出的 tag 地址）。
 
@@ -53,12 +53,14 @@ dsh plugin --profile web add http://<你的站>/dsh-context-control/dsh-context-
 
 ### 在哪里点
 
-打开任一会话输入框左侧的「上下文」胶囊 → 面板底部有一行版本信息：
+打开任一会话输入框左侧的「组件上下文」胶囊 → 面板底部有一行版本信息：
 
 - 平时：`v0.4.0 · 已是最新 · [检查更新]`
 - 有新版本：胶囊上出现 `↑` 角标，面板里显示 `v0.4.0 → v0.4.1 · [一键升级]`
 - 升级中：`[升级中…]` + `[详情]`（展开是 pnpm 的实时输出）
-- 完成后：`[重启服务]`（宿主不等 HMR）或 `[刷新页面]`（新代码已生效）
+- 完成后：`已升级，重启 dsh web 后生效`（新代码已被 HMR 接上时改为 `[刷新页面]`）
+
+插件**不会**提供「重启服务」按钮：宿主可能是你用任意参数、任意守护方式拉起来的，插件重猜一条命令行去重启它，轻则参数不对，重则把 GUI 弄没。重启这一步留给在终端里启动它的你。
 
 同一台机器上的多个面板共用这一份状态：装的是哪个版本是宿主的事实，不是某个会话的。
 
@@ -76,11 +78,11 @@ dsh plugin --profile web add http://<你的站>/dsh-context-control/dsh-context-
    `<spec>` 由渠道决定：registry 是 `名字@版本`，tarball 渠道是新的 tarball URL。这样它就自动继承了 DSH 包管理器的全部保证：profile 写锁、`engines.dsh` 兼容性预检、失败时把 `package.json` 与 `pnpm-lock.yaml` 回滚到快照。
 
 3. **验**：读 `node_modules/<包名>/package.json` 的实际版本。pnpm 的退出码 0 不等于装到了你要的版本（`minimumReleaseAge` 这类供应链策略会装成更旧的版本），所以版本不符会如实报出来。
-4. **重启**：宿主退出，一个脱离的 helper 等旧进程退出、端口释放，再用**同一条命令行**把宿主拉起来（`respawn.cjs`）。没有 systemd / pm2 / Windows 服务的机器也不会因为一次升级变成一个死掉的 GUI。
+4. **提示重启**：到这里就结束。宿主没有退出，也没有被插件重新拉起；面板显示「已升级，重启 dsh web 后生效」，你按原来的启动方式重启即可。
 
-   有 HMR 时也可能不需要重启：插件会对比「模块加载时的版本」和「磁盘上的版本」，只有确实换了代码才要求重启——否则只提示刷新页面。
+   有 HMR 时通常连重启都不需要：插件会对比「模块加载时的版本」和「磁盘上的版本」，代码确实已经换了才提示重启——否则只提供 `[刷新页面]`。
 
-### 结果在重启后仍然可见
+### 升级结果在插件重载后仍然可见
 
 一次升级常常会导致插件自己被替换。为了不让「升级完成了」这个结论随之蒸发，任务结果写在 `$DSH_HOME/storages/dsh-context-control-update.json`，插件重新加载后会读回它；记录里如果还是 `running`（说明安装被重载打断），会如实报告为失败而不是永远转圈。
 
@@ -178,10 +180,6 @@ DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的
       # upgradeTimeoutMs: 900000
       # launcher: <dsh 的可执行入口，默认自动发现>
       # runtimeVersion: 0.2.1-rc.2   # 自动发现失败时用于 engines.dsh 判断
-      restart:
-        mode: respawn      # respawn | exit（交给 systemd 等）| none
-        port: 10550        # 等待端口释放；默认取命令行里的 --port
-        logFile: C:\Users\you\.dsh\logs\dsh-web-respawn.log
 ```
 
 `link:` / `file:` 安装**默认不允许原地升级**（会覆盖你的工作目录），面板会显示「升级不可用」；显式配了 `manifestUrl` / `github` / `registry` 才解除这个保护。
@@ -193,7 +191,7 @@ DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的
 | `检查失败` / `cannot tell which channel` | 渠道不可达，或安装来源是 git 分支。面板报错而不会说「已是最新」。修渠道，或显式配 `update.manifestUrl`。 |
 | `升级不可用` | 当前是 `link:` / `file:` 安装。按需发布并 `add <tarball URL>`，或配 `update.manifestUrl`。 |
 | 升级后仍是旧版本 | `[详情]` 里看 pnpm 输出；`minimumReleaseAge` 会暂缓刚发布的版本，等一会儿或显式指定版本。 |
-| 重启没回来 | 看 `restart.logFile`。需要的话把 `restart.mode` 改成 `exit` 交给自己的守护进程。 |
+| 升级后仍提示重启 | 宿主还在跑旧代码：按你**原来的启动方式**重启 `dsh web`。插件故意不代劳——它重猜的命令行可能少了你的 `--profile` / `--port` / 环境变量。 |
 | 想钉回旧版本 | `dsh plugin --profile web add http://<站>/dsh-context-control/dsh-context-control-0.3.5.tgz`（`channel.json` 累积版本就是为了这个）。 |
 | 想回到本地开发态 | `dsh plugin --profile web add link:C:/data/projects/dsh-context-control`，再重建插件的 `node_modules` junction（见下）。 |
 
@@ -210,8 +208,8 @@ mklink /J "C:\data\projects\dsh-context-control\node_modules" "C:\Users\<you>\Ap
 测试：
 
 ```pwsh
-npm run check        # 清单守卫 + node --check + 20 项升级测试 + 宿主门控回归 + 32 项客户端离线回归
+npm run check        # 清单守卫 + node --check + 21 项升级测试 + 宿主门控回归 + 35 项客户端离线回归
 npm test             # 只跑两套测试
 ```
 
-客户端回归是离线的：`test/client-harness.cjs` 自带一个 mini React、假网关和假 DOM，把面板、键盘导航、多面板隔离、以及升级按钮的每个阶段（当前 → 不可用 → 可升级 → 升级中 → 重启 → 等宿主回来）都走一遍。
+客户端回归是离线的：`test/client-harness.cjs` 自带一个 mini React、假网关和假 DOM，把面板、键盘导航、多面板隔离、以及升级按钮的每个阶段（当前 → 不可用 → 可升级 → 升级中 → 重启提示）都走一遍。

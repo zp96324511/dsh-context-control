@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-control",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "type": "module",
   "description": "会话级 MCP/技能/内置工具可见性门控：新会话默认精简（官方条目开、用户配置的关，工具默认全开），对话中通过模型工具或输入框面板按需开关；每个条目带说明，开关状态按项目持久化，并自带在线升级检查与一键升级。",
   "license": "MIT",
@@ -17,7 +17,6 @@
     "index.js",
     "client.js",
     "update.js",
-    "respawn.cjs",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
@@ -53,7 +52,7 @@
     "access": "public"
   },
   "scripts": {
-    "check": "node scripts/check-manifest.mjs && node --check index.js && node --check update.js && node --check respawn.cjs && node --check client.js && npm run test",
+    "check": "node scripts/check-manifest.mjs && node --check index.js && node --check update.js && node --check client.js && npm run test",
     "test": "node --test test/update.test.mjs test/host-skill-scope.test.mjs && node test/client-harness.cjs ./client.js",
     "channel": "node scripts/publish-channel.mjs",
     "channel:serve": "node scripts/serve-channel.cjs"
