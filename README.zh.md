@@ -182,7 +182,8 @@ DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的
 - 内置工具**默认全开**，这样升级不会改变现有行为；想默认关掉某几个，用 `defaultOffTools`（见下）。
 - `run_code`、`context_control`、`structured_output` 受保护，永远不出现在列表里，也不能被关——`context_control` 本身就是把门控打开的入口，关掉它等于把自己锁在门外。
 - MCP 工具不单独列出（它们跟着服务器开关走）；`list_mcp_resources` 等资源工具同样由服务器开关控制。
-- 面板底部只有版本行和一个「?」按钮：使用说明折叠在按钮后面，点开才占位；点「检查更新」后按钮立刻变成「检查中…」并转圈（同步进入 busy，不等响应），宿主从缓存里毫秒级回答也不会看起来像没点到。
+- 面板底部的版本行右侧有一个「?」按钮：使用说明折叠在它后面，点开才占位；同一行还有「检查更新」，点击后立刻变成「检查中…」并转圈（同步进入 busy，不等响应），宿主从缓存里毫秒级回答也不会看起来像没点到。
+- 每行的第二行永远有内容：资源自己有描述就显示描述，没有就显示条目自身的说明（MCP 服务器显示工具数、技能显示来源）。MCP 服务器只有在 `initialize` 里发布了 `instructions` 才有描述可显示——`chrome-devtools-mcp` 没有这个字段，所以它那一行显示的是工具数。
 
 在 `$DSH_HOME/profiles/web/cordis.patch.yml`（默认
 `~/.dsh/profiles/web/cordis.patch.yml`）里：
@@ -231,7 +232,7 @@ mklink /J "C:\data\projects\dsh-context-control\node_modules" "C:\Users\<you>\Ap
 测试：
 
 ```pwsh
-npm run check        # 清单守卫 + node --check + 25 项升级测试 + 8 项宿主门控回归 + 45 项客户端离线回归
+npm run check        # 清单守卫 + node --check + 25 项升级测试 + 8 项宿主门控回归 + 46 项客户端离线回归
 npm test             # 只跑两套测试
 ```
 

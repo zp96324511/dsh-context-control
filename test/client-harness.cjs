@@ -571,6 +571,20 @@ const fakeCtx = {
     assert(first.props.title.includes('跨会话记忆'), `title is ${first.props.title}`);
     assert(!textOfNode(second).includes('跨会话'), `second row picked up a foreign description: ${textOfNode(second)}`);
     assert(second.props['aria-description'] === undefined, 'empty description should stay absent');
+    /* An MCP server that publishes no `instructions` has no description, but
+     * the second line still says what the entry is rather than collapsing the
+     * row — that blank half-row was the bug being fixed. */
+    assert(textOfNode(second).includes('32 tools'), `a descriptionless row lost its second line: ${textOfNode(second)}`);
+  });
+
+  check('rows fit the popover instead of forcing a horizontal scrollbar', () => {
+    for (const row of rowList(tree)) {
+      const style = row.props.style;
+      assert(style.boxSizing === 'border-box',
+        `${row.props['aria-label']} is ${style.boxSizing}: width 100% plus padding overflows the popover`);
+    }
+    const body = find(tree, (element) => element.props?.['role'] === 'tabpanel')[0];
+    assert(body.style.overflowX === 'hidden', 'the scroller would enable a horizontal bar');
   });
 
   check('tabs carry on/total for every kind, with no cost estimate', () => {
@@ -605,6 +619,10 @@ const fakeCtx = {
     assert(toggle !== undefined, 'no hint toggle in the popover');
     assert(hintNodes(tree).length === 0, 'the hint paragraph is printed before the button is pressed');
     assert(toggle.props['aria-expanded'] === 'false', `aria-expanded is ${toggle.props['aria-expanded']}`);
+    /* It sits in the update row, not on a row of its own with empty space. */
+    const footer = find(tree, (element) => element.props?.['data-context-control'] === 'update')[0];
+    assert(find(footer, (element) => element === toggle).length === 1,
+      'the "?" button is not part of the update row');
 
     toggle.props.onClick();
     tree = mount({ type: Pill, props: { sessionId: 's1' } });

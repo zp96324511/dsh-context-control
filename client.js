@@ -284,6 +284,9 @@ window.__ModuleLoader__.load({
         position: 'fixed', zIndex: 80,
         maxHeight: '320px', overflow: 'hidden',
         overscrollBehavior: 'contain',
+        /* The measured width is the whole popover: without border-box the 6px
+         * padding and 1px border were added on top of it. */
+        boxSizing: 'border-box',
         padding: '6px',
         display: 'flex', flexDirection: 'column', gap: '1px',
         background: 'var(--dsw-alias-bg-elevated, #232326)',
@@ -322,11 +325,18 @@ window.__ModuleLoader__.load({
       tabBody: {
         display: 'flex', flexDirection: 'column', gap: '1px',
         flex: '1 1 auto', minHeight: 0, overflowY: 'auto',
+        /* A vertical scroller would otherwise turn the other axis into `auto`
+         * too, so any row a few pixels too wide became a horizontal scrollbar. */
+        overflowX: 'hidden',
         overscrollBehavior: 'contain',
       },
       menuRow: {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         gap: '8px', width: '100%',
+        /* A div is content-box by default: width 100% plus 16px of padding put
+         * the row past the popover and produced a horizontal scrollbar that
+         * pushed the switches out of sight. */
+        boxSizing: 'border-box',
         padding: '5px 8px', borderRadius: '6px',
         fontSize: '12px', lineHeight: '18px', textAlign: 'left',
         background: 'transparent',
@@ -397,13 +407,10 @@ window.__ModuleLoader__.load({
         fontSize: '10px', lineHeight: '12px', flex: 'none',
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
       },
-      hintRow: {
-        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-        padding: '2px 8px', minHeight: '16px',
-      },
       hintButton: {
         flex: 'none', width: '16px', height: '16px', padding: '0',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        boxSizing: 'border-box',
         border: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.35))`,
         borderRadius: '50%', background: 'transparent', cursor: 'pointer',
         fontSize: '10px', lineHeight: '1', fontFamily: 'inherit',
@@ -882,9 +889,13 @@ window.__ModuleLoader__.load({
           return ''
         }
 
-        function UpdateFooter() {
+        function UpdateFooter(props) {
           const update = useUpdateState()
           const [showLog, setShowLog] = useState(false)
+          /* Owned by the popover, which renders this footer; the toggle lives
+           * in the footer row beside the update button. */
+          const showHint = props.showHint === true
+          const onToggleHint = props.onToggleHint
           const info = update.info
           const action = updateAction(update)
           const note = updateNote(update)
@@ -939,7 +950,21 @@ window.__ModuleLoader__.load({
                  * that answers in milliseconds otherwise looks like a click
                  * that did nothing. */
               }, action.busy === true ? h('span', { style: CSS.spinner, 'aria-hidden': 'true' }) : null, action.label),
+              /* The usage note used to be its own paragraph under this row;
+               * the "?" sits in the row and the note only appears when asked. */
+              h('button', {
+                type: 'button',
+                'data-context-control': 'hint-toggle',
+                'aria-expanded': showHint ? 'true' : 'false',
+                'aria-label': t('hintToggle'),
+                title: t('hintToggle'),
+                style: showHint ? { ...CSS.hintButton, ...CSS.hintButtonOn } : CSS.hintButton,
+                onClick: onToggleHint,
+              }, '?'),
             ),
+            showHint
+              ? h('div', { style: CSS.hintText, 'data-context-control': 'hint' }, t('hint'))
+              : null,
             showLog && tail !== undefined
               ? h('div', { style: CSS.log, 'data-context-control': 'update-log' }, tail)
               : null,
@@ -1171,6 +1196,14 @@ window.__ModuleLoader__.load({
             rowIndex += 1;
             rowRefs.current[index] = { row: null, switches: [] };
             const description = entry.description ?? '';
+            /* The second line always exists: the resource's own description
+             * when it publishes one, otherwise what the entry is (an MCP server
+             * with no `instructions` still says how many tools it brings). A
+             * row with a blank half-primed for nothing is what a missing line
+             * used to look like. */
+            const secondLine = description !== ''
+              ? description
+              : (entry.detail ?? '');
             const entryKey = `${entry.kind}:${entry.name}`;
             /* Two switches per entry, at the end of the row: 会话 (this
              * conversation only, never saved) and 工作区 (this workspace's
@@ -1211,7 +1244,7 @@ window.__ModuleLoader__.load({
                   entry.kind === 'tool' ? null : h('span', { style: CSS.badge }, entry.official ? t('official') : t('custom')),
                   h('span', { style: CSS.menuName }, entry.name),
                 ),
-                description === '' ? null : h('span', { style: CSS.menuDesc }, description),
+                secondLine === '' ? null : h('span', { style: CSS.menuDesc }, secondLine),
               ),
               h('span', { style: CSS.switches }, specs.map((spec, column) => h('button', {
                 key: spec.scope,
@@ -1328,21 +1361,11 @@ window.__ModuleLoader__.load({
               style: CSS.tabBody,
             }, active.entries.map(row)),
             snapshot.error !== undefined ? h('div', { key: '__error', style: CSS.error }, snapshot.error) : null,
-            h(UpdateFooter, { key: '__update' }),
-            h('div', { key: '__hint', style: CSS.hintRow },
-              h('button', {
-                type: 'button',
-                'data-context-control': 'hint-toggle',
-                'aria-expanded': showHint ? 'true' : 'false',
-                'aria-label': t('hintToggle'),
-                title: t('hintToggle'),
-                style: showHint ? { ...CSS.hintButton, ...CSS.hintButtonOn } : CSS.hintButton,
-                onClick: () => { setShowHint(!showHint) },
-              }, '?'),
-            ),
-            showHint
-              ? h('div', { key: '__hint-text', style: CSS.hintText, 'data-context-control': 'hint' }, t('hint'))
-              : null,
+            h(UpdateFooter, {
+              key: '__update',
+              showHint,
+              onToggleHint: () => { setShowHint(!showHint) },
+            }),
           ), document.body);
         }
 

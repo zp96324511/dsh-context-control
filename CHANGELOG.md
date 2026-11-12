@@ -4,6 +4,20 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.7.2 — 2026-11-12
+
+- **The row fits again.** Rows are divs now (they were buttons before 0.7.0,
+  and a button is border-box while a div is not), so `width: 100%` plus 16px of
+  padding made every row 16px wider than the popover: a horizontal scrollbar
+  appeared and pushed the workspace dot off the right edge. Rows and the popover
+  itself are border-box, and the list keeps `overflow-x: hidden`.
+- **The "?" moved into the update row.** It used to sit alone on a row of its
+  own with a wide empty line in front of it; it now shares the row with the
+  version and the buttons, and the note unfolds under that row when asked.
+- **The second line never disappears.** A row shows the resource's description
+  when it has one, and the entry's own detail otherwise — an MCP server with no
+  `instructions` still says how many tools it brings instead of collapsing into
+  a half-empty row.
 ## 0.7.1 — 2026-11-12
 
 - **The switches are dots again.** Each row ends in two radio dots instead of

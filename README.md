@@ -217,10 +217,15 @@ through `aria-description`.
   that opens the gate, and hiding it would lock the gate from the inside.
 - MCP tools are not listed individually (they follow their server switch), and
   `list_mcp_resources` and friends follow the server switch too.
-- The popover bottom is just the version row and a `?` button: the usage note is
-  collapsed behind it and only takes room when opened. Pressing the check button
-  switches it to a spinning \u201cchecking\u201d state immediately, so an answer the host
+- The version row carries a `?` button at its right: the usage note is collapsed
+  behind it and only takes room when opened. The same row holds the check button,
+  which switches to a spinning \u201cchecking\u201d state immediately, so an answer the host
   serves from its cache in milliseconds does not look like a click that did nothing.
+- A row's second line is never empty: it shows the resource's description when it
+  publishes one, and the entry's own detail otherwise (tool count for an MCP server,
+  origin for a skill). An MCP server can only be described from the `instructions` it
+  returns from `initialize` \u2014 `chrome-devtools-mcp` has none, so its row shows the
+  tool count.
 
 In `$DSH_HOME/profiles/web/cordis.patch.yml` (default
 `~/.dsh/profiles/web/cordis.patch.yml`):
@@ -266,7 +271,7 @@ mklink /J "C:\path\to\dsh-context-control\node_modules" "C:\Users\<you>\AppData\
 (Recreate it after `nvm use` switches Node.)
 
 ```pwsh
-npm run check        # manifest guard + node --check + 25 update tests + 8 host gating tests + 45 client regression tests
+npm run check        # manifest guard + node --check + 25 update tests + 8 host gating tests + 46 client regression tests
 npm test             # the two test suites only
 ```
 
