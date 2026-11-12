@@ -201,7 +201,8 @@ window.__ModuleLoader__.load({
         scopeWorkspace: '工作区',
         scopeSessionTitle: '会话级：只影响本会话；重新打开本会话（含重启后）仍是这个状态，归档后恢复则重新继承工作区',
         scopeWorkspaceTitle: '工作区级：写入本项目默认值；本会话没有自己的选择时立即生效，新会话继承',
-        hint: '每个条目两个开关，会话级优先：「会话」只影响本会话，重新打开本会话仍保留（归档后恢复重新继承工作区）；「工作区」写入项目默认值，新会话继承（下次请求生效）',
+        hint: '每个条目两个圆点：蓝＝会话级（只影响本会话，重新打开仍保留；归档后恢复重新继承工作区），紫＝工作区级（本项目默认值，新会话继承）；悬停看说明，会话级优先',
+        hintToggle: '使用说明',
         on: '已启用：',
         busy: '…',
         checkUpdate: '检查更新',
@@ -238,7 +239,8 @@ window.__ModuleLoader__.load({
         scopeWorkspace: 'workspace',
         scopeSessionTitle: 'session scope: this conversation only, kept when it is reopened (a conversation restored from the archive starts from the workspace again)',
         scopeWorkspaceTitle: 'workspace scope: saved as this workspace\u2019s default; applied here when this conversation has no choice of its own, inherited by new sessions',
-        hint: 'Two switches per entry, session first: \u201csession\u201d affects this conversation only and survives reopening it (restoring it from the archive starts from the workspace); \u201cworkspace\u201d writes the project default that new sessions inherit (effective on the next request)',
+        hint: 'Two dots per entry: blue is the session scope (this conversation only, kept when it is reopened; restoring from the archive starts from the workspace), violet is the workspace scope (the project default that new sessions inherit). Hover for details; the session wins',
+        hintToggle: 'Usage notes',
         on: 'Enabled: ',
         busy: '…',
         checkUpdate: 'Check for updates',
@@ -348,32 +350,71 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       },
-      /* The two scope switches sit at the end of each row, side by side: a
-       * filled one is on, a hollow one is off. Same pill shape at the same
-       * height, so a row reads as one line whatever is on. */
+      /* Two radio-style switches at the end of each row, no visible text: a
+       * ring when off, the same ring with a dot when on, so a toggle never
+       * changes the row's size. Both scopes look identical; the colour (blue
+       * for the session, violet for the workspace), the tooltip and the
+       * accessible name say which one is which. */
       switches: {
-        display: 'inline-flex', alignItems: 'center', gap: '3px', flex: 'none',
+        display: 'inline-flex', alignItems: 'center', gap: '4px', flex: 'none',
       },
       scopeSwitch: {
-        minWidth: '38px', padding: '0 6px',
-        border: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.35))`,
-        borderRadius: '6px', background: 'transparent', cursor: 'pointer',
-        fontSize: '10px', lineHeight: '17px', fontFamily: 'inherit',
-        color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
-        transition: 'background 80ms ease-out, border-color 80ms ease-out, color 80ms ease-out',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: '17px', height: '17px', padding: '0', margin: '0',
+        border: 'none', borderRadius: '50%', background: 'transparent',
+        cursor: 'pointer', fontFamily: 'inherit',
+        transition: 'background 90ms ease-out',
       },
-      scopeSwitchOn: {
-        borderColor: 'var(--dsw-alias-state-business-primary, #247bbf)',
-        background: 'rgba(36,123,191,.14)',
-        color: 'var(--dsw-alias-state-business-primary, #247bbf)',
+      scopeSwitchHover: {
+        background: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.18))',
+      },
+      /* Blue is the session's own choice, violet the project default; the ring
+       * keeps its hue when off and only loses saturation, so the pair stays
+       * distinguishable at a glance. */
+      scopeSession: { color: 'var(--dsw-alias-state-business-primary, #247bbf)' },
+      scopeWorkspace: { color: '#8b5cf6' },
+      radio: {
+        width: '11px', height: '11px', boxSizing: 'border-box',
+        border: '1.5px solid currentColor', borderRadius: '50%',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        flex: 'none', opacity: '.5',
+        transition: 'opacity 90ms ease-out',
+      },
+      radioOn: { opacity: '1' },
+      radioDot: {
+        width: '5px', height: '5px', borderRadius: '50%',
+        background: 'currentColor',
+      },
+      /* The one `@keyframes` rule this panel needs (the update spinner) lives
+       * in an injected stylesheet; see ensureSpinKeyframes. */
+      spinner: {
+        display: 'inline-block', width: '9px', height: '9px', flex: 'none',
+        boxSizing: 'border-box', borderRadius: '50%',
+        border: '1.5px solid currentColor', borderTopColor: 'transparent',
+        animation: 'dsh-context-control-spin 700ms linear infinite',
       },
       badge: {
         fontSize: '10px', lineHeight: '12px', flex: 'none',
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
       },
-      hint: {
-        padding: '4px 8px 2px',
-        fontSize: '11px', lineHeight: '16px',
+      hintRow: {
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+        padding: '2px 8px', minHeight: '16px',
+      },
+      hintButton: {
+        flex: 'none', width: '16px', height: '16px', padding: '0',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        border: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.35))`,
+        borderRadius: '50%', background: 'transparent', cursor: 'pointer',
+        fontSize: '10px', lineHeight: '1', fontFamily: 'inherit',
+        color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.75))',
+      },
+      hintButtonOn: {
+        borderColor: 'var(--dsw-alias-state-business-primary, #247bbf)',
+        color: 'var(--dsw-alias-state-business-primary, #247bbf)',
+      },
+      hintText: {
+        padding: '0 8px 4px', fontSize: '11px', lineHeight: '16px',
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
       },
       error: {
@@ -413,6 +454,7 @@ window.__ModuleLoader__.load({
       },
       footerButton: {
         flex: 'none',
+        display: 'inline-flex', alignItems: 'center', gap: '5px',
         border: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.35))`,
         borderRadius: '6px', padding: '0 6px',
         fontSize: '11px', lineHeight: '18px',
@@ -434,6 +476,24 @@ window.__ModuleLoader__.load({
       },
     };
 
+    /* Inline styles cannot declare `@keyframes`, and the update spinner needs
+     * one. This is the panel's single stylesheet, injected on demand and
+     * guarded by its id so re-applying the plugin cannot stack copies. */
+    const SPIN_KEYFRAMES_ID = 'dsh-context-control-keyframes';
+    function ensureSpinKeyframes() {
+      try {
+        if (typeof document === 'undefined' || typeof document.createElement !== 'function') return;
+        if (typeof document.getElementById === 'function' && document.getElementById(SPIN_KEYFRAMES_ID) !== null) return;
+        const style = document.createElement('style');
+        style.id = SPIN_KEYFRAMES_ID;
+        style.textContent = '@keyframes dsh-context-control-spin { to { transform: rotate(360deg) } }';
+        const holder = document.head ?? document.body;
+        if (holder !== null && holder !== undefined && typeof holder.appendChild === 'function') holder.appendChild(style);
+      } catch {
+        /* Without the rule the busy label still changes; only the rotation is lost. */
+      }
+    }
+
     /* No `remote.contextControl` in the static inject: this module itself
      * mounts that namespace, so waiting for it in inject would deadlock the
      * fiber (apply never runs until inject resolves, but the service only
@@ -442,6 +502,7 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'sessions', 'locale', 'remote'],
       async apply(ctx) {
+        ensureSpinKeyframes();
         /* Mount the descriptor contribution: this is what creates the
          * remote.contextControl namespace service. */
         const unmount = await ctx.remote.$mount(CONTEXT_CONTROL_CONTRIBUTION);
@@ -666,6 +727,16 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /* A user-asked check: announce the phase before the request, so the
+         * click is acknowledged even when the host answers from its channel
+         * cache in a few milliseconds. The auto check stays silent, because a
+         * background re-check must not make the row flicker. */
+        function checkNow() {
+          if (updateInFlight) return
+          updateStore.set({ phase: 'checking', error: undefined })
+          void refreshUpdate({ force: true })
+        }
+
         function stopUpdatePolling() {
           if (updatePollTimer !== null) {
             clearTimeout(updatePollTimer)
@@ -775,7 +846,7 @@ window.__ModuleLoader__.load({
                 ? update.job.restartRequired !== false
                 : info?.restartRequired !== false
               return needsRestart
-                ? { label: t('checkUpdate'), onClick: () => { void refreshUpdate({ force: true }) } }
+                ? { label: t('checkUpdate'), onClick: () => { checkNow() } }
                 : { label: t('reload'), onClick: reloadPage }
             }
             case 'reload':
@@ -783,14 +854,14 @@ window.__ModuleLoader__.load({
             case 'unavailable':
               /* Clicking re-asks: a checkout that later gained a channel (or a
                * host that came back online) must not need a page reload. */
-              return { label: t('updateUnavailable'), onClick: () => { void refreshUpdate({ force: true }) } }
+              return { label: t('updateUnavailable'), onClick: () => { checkNow() } }
             case 'error':
-              return { label: t('retry'), onClick: () => { void refreshUpdate({ force: true }) } }
+              return { label: t('retry'), onClick: () => { checkNow() } }
             case 'current':
-              return { label: t('checkUpdate'), onClick: () => { void refreshUpdate({ force: true }) } }
+              return { label: t('checkUpdate'), onClick: () => { checkNow() } }
             case 'idle':
             default:
-              return { label: t('checkUpdate'), onClick: () => { void refreshUpdate({ force: true }) } }
+              return { label: t('checkUpdate'), onClick: () => { checkNow() } }
           }
         }
 
@@ -850,7 +921,7 @@ window.__ModuleLoader__.load({
                 'aria-label': t('checkUpdate'),
                 'data-context-control': 'update-check',
                 style: CSS.footerButton,
-                onClick: () => { void refreshUpdate({ force: true }) },
+                onClick: () => { checkNow() },
               }, '⟳'),
               h('button', {
                 type: 'button',
@@ -864,7 +935,10 @@ window.__ModuleLoader__.load({
                   if (action.busy === true) return
                   if (typeof action.onClick === 'function') action.onClick()
                 },
-              }, action.label),
+                /* A busy step gets a rotating ring beside its label: a check
+                 * that answers in milliseconds otherwise looks like a click
+                 * that did nothing. */
+              }, action.busy === true ? h('span', { style: CSS.spinner, 'aria-hidden': 'true' }) : null, action.label),
             ),
             showLog && tail !== undefined
               ? h('div', { style: CSS.log, 'data-context-control': 'update-log' }, tail)
@@ -972,6 +1046,10 @@ window.__ModuleLoader__.load({
           const onCloseRef = useRef(onClose);
           onCloseRef.current = onClose;
           const [pos, setPos] = useState(undefined);
+          /* The usage hint is a paragraph; printing it under every popover cost
+           * three lines of a panel that is already tight. A "?" button keeps it
+           * one click away without spending the space. */
+          const [showHint, setShowHint] = useState(false);
 
           useEffect(() => {
             const measure = () => {
@@ -1151,12 +1229,22 @@ window.__ModuleLoader__.load({
                 'data-context-control-scope': spec.scope,
                 'data-context-control-entry': entryKey,
                 'data-context-control-state': spec.checked ? 'on' : 'off',
-                style: spec.checked ? { ...CSS.scopeSwitch, ...CSS.scopeSwitchOn } : CSS.scopeSwitch,
+                style: {
+                  ...CSS.scopeSwitch,
+                  ...(spec.scope === 'session' ? CSS.scopeSession : CSS.scopeWorkspace),
+                },
+                onMouseEnter: (event) => { event.currentTarget.style.background = CSS.scopeSwitchHover.background; },
+                onMouseLeave: (event) => { event.currentTarget.style.background = 'transparent'; },
                 onClick: () => {
                   if (snapshot.busy) return;
                   void toggleState(state, sessionId, entry.kind, entry.name, !spec.checked, spec.scope);
                 },
-              }, spec.label))),
+              }, h('span', {
+                /* A ring for off, the same ring with a dot for on: the shape
+                 * never changes size, so a toggle cannot shift the row. */
+                style: spec.checked ? { ...CSS.radio, ...CSS.radioOn } : CSS.radio,
+                'aria-hidden': 'true',
+              }, spec.checked ? h('span', { style: CSS.radioDot }) : null)))),
             );
           };
 
@@ -1241,7 +1329,20 @@ window.__ModuleLoader__.load({
             }, active.entries.map(row)),
             snapshot.error !== undefined ? h('div', { key: '__error', style: CSS.error }, snapshot.error) : null,
             h(UpdateFooter, { key: '__update' }),
-            h('div', { key: '__hint', style: CSS.hint }, t('hint')),
+            h('div', { key: '__hint', style: CSS.hintRow },
+              h('button', {
+                type: 'button',
+                'data-context-control': 'hint-toggle',
+                'aria-expanded': showHint ? 'true' : 'false',
+                'aria-label': t('hintToggle'),
+                title: t('hintToggle'),
+                style: showHint ? { ...CSS.hintButton, ...CSS.hintButtonOn } : CSS.hintButton,
+                onClick: () => { setShowHint(!showHint) },
+              }, '?'),
+            ),
+            showHint
+              ? h('div', { key: '__hint-text', style: CSS.hintText, 'data-context-control': 'hint' }, t('hint'))
+              : null,
           ), document.body);
         }
 

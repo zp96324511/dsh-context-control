@@ -1,6 +1,6 @@
 # dsh-context-control
 
-Visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on, and each row shows what the resource does. **Each entry has two switches** — `session` changes this conversation only, `workspace` stores a project default that this session adopts at once and every later session in the same project inherits (a session's own choice still wins). The plugin also **carries its own update channel**: it can tell you it is behind and upgrade itself in one click. After an upgrade it only tells you to restart `dsh web` — how the host was started is the user's business, not the plugin's.
+Visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on, and each row shows what the resource does. **Each entry has two radio dots** (blue = session, violet = workspace; hover for details) — `session` changes this conversation only, `workspace` stores a project default that this session adopts at once and every later session in the same project inherits (a session's own choice still wins). The plugin also **carries its own update channel**: it can tell you it is behind and upgrade itself in one click. After an upgrade it only tells you to restart `dsh web` — how the host was started is the user's business, not the plugin's.
 
 English | [中文](README.zh.md)
 
@@ -127,7 +127,7 @@ The `Publish` workflow runs on the tag: it checks `tag == version`, runs `npm ru
 
 ### Session scope vs workspace scope
 
-Every row in the panel ends in two switches, and the `context_control` tool
+Every row in the panel ends in two radio dots (hollow ring = off, ring with a centre dot = on; blue = session, violet = workspace), and the `context_control` tool
 takes the same choice as a `scope` argument:
 
 | `scope` | What it writes | What it reaches |
@@ -195,7 +195,7 @@ in one of those roots, then look for `skill discovery failed` in the host log.
 ### Which tools are gated
 
 The panel lists each **gateable built-in tool** as its own row, alongside MCP
-servers and skills — with two switches per row (session / workspace, see
+servers and skills — with two radio dots per row (blue = session, violet = workspace, see
 above). The three kinds (MCP / skills / tools) are switched with
 tabs instead of stacking three groups; each tab shows its own `on/total`, and
 the pill sums the three: `Components 3/5`. Every row also carries a one-line
@@ -217,6 +217,10 @@ through `aria-description`.
   that opens the gate, and hiding it would lock the gate from the inside.
 - MCP tools are not listed individually (they follow their server switch), and
   `list_mcp_resources` and friends follow the server switch too.
+- The popover bottom is just the version row and a `?` button: the usage note is
+  collapsed behind it and only takes room when opened. Pressing the check button
+  switches it to a spinning \u201cchecking\u201d state immediately, so an answer the host
+  serves from its cache in milliseconds does not look like a click that did nothing.
 
 In `$DSH_HOME/profiles/web/cordis.patch.yml` (default
 `~/.dsh/profiles/web/cordis.patch.yml`):
@@ -262,7 +266,7 @@ mklink /J "C:\path\to\dsh-context-control\node_modules" "C:\Users\<you>\AppData\
 (Recreate it after `nvm use` switches Node.)
 
 ```pwsh
-npm run check        # manifest guard + node --check + 25 update tests + 6 host gating tests + 42 client regression tests
+npm run check        # manifest guard + node --check + 25 update tests + 8 host gating tests + 45 client regression tests
 npm test             # the two test suites only
 ```
 

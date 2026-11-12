@@ -4,6 +4,27 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.7.1 — 2026-11-12
+
+- **The switches are dots again.** Each row ends in two radio dots instead of
+  two labelled pills: a hollow ring when off, the same ring with a centre dot
+  when on, so a toggle never changes the row's height or width. The session dot
+  is blue, the workspace dot violet — same size, same shape, distinguishable at
+  a glance and by tooltip. The accessible names still say 会话 / 工作区, so a
+  screen reader and the hover title keep the meaning that the label used to
+  carry. The panel is also a bit narrower again (each row lost ~70px of text).
+- **The usage note is collapsed.** The three-line paragraph under the update
+  row is now behind a small `?` button at the bottom right of the popover; it
+  only takes room when opened, which matters most on a short viewport where the
+  note used to squeeze the list.
+- **Checking for updates shows that it is working.** A user-triggered check now
+  enters the `checking` phase before the request leaves the page, and every busy
+  action (check, one-click upgrade) shows a rotating ring beside its label. The
+  channel answer often arrives from the host cache within milliseconds, so the
+  old behaviour — a button that looked untouched until the row silently settled
+  — read as a broken click. The automatic half-hourly re-check still runs
+  silently so a background poll cannot make the row flicker.
+
 ## 0.7.0 — 2026-11-12
 
 - **Two scopes per row.** Every entry (MCP server, skill, built-in tool) now

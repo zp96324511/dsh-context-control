@@ -107,12 +107,29 @@ function makeNode(tag, props) {
       }
       return false;
     },
+    appendChild(child) {
+      node.children.push(child);
+      child.parent = node;
+      return child;
+    },
   };
   return node;
 }
 
 const documentStub = {
   body: makeNode('body', {}),
+  head: makeNode('head', {}),
+  /* The client injects one stylesheet for the update spinner's @keyframes, so
+   * the stub needs the three calls that injection makes. */
+  createElement(tag) {
+    const node = makeNode(tag, {});
+    node.id = '';
+    node.textContent = '';
+    return node;
+  },
+  getElementById(id) {
+    return documentStub.head.children.find((child) => child.id === id) ?? null;
+  },
   addEventListener(type, fn) { listeners.push({ type, fn }); },
   removeEventListener(type, fn) {
     const index = listeners.findIndex((entry) => entry.type === type && entry.fn === fn);
@@ -507,9 +524,29 @@ const fakeCtx = {
       assert(pair.length === 2, `${row.props['aria-label']} has ${pair.length} switches`);
       assert(pair.map((sw) => sw.props['data-context-control-scope']).join(',') === 'session,workspace',
         `${row.props['aria-label']} switches are ${pair.map((sw) => sw.props['data-context-control-scope'])}`);
-      assert(textOfNode(pair[0]) === '会话' && textOfNode(pair[1]) === '工作区',
-        `${row.props['aria-label']} labels are ${pair.map(textOfNode)}`);
+      /* No visible text any more: the name is in the accessible label and the
+       * tooltip. The session dot is blue, the workspace dot violet. */
+      assert(pair[0].props['aria-label'].endsWith('· 会话') && pair[1].props['aria-label'].endsWith('· 工作区'),
+        `${row.props['aria-label']} names are ${pair.map((sw) => sw.props['aria-label'])}`);
+      assert(textOfNode(pair[0]) === '' && textOfNode(pair[1]) === '',
+        `${row.props['aria-label']} still prints a label: ${pair.map(textOfNode)}`);
+      assert(pair[0].props.style.color.includes('--dsw-alias-state-business-primary'),
+        `session colour is ${pair[0].props.style.color}`);
+      assert(pair[1].props.style.color === '#8b5cf6', `workspace colour is ${pair[1].props.style.color}`);
     }
+  });
+
+  check('a switch is a ring off and a ring with a dot on', () => {
+    const ringOf = (sw) => sw.children.find((child) => child?.props?.style?.border === '1.5px solid currentColor');
+    const dotIn = (sw) => ringOf(sw)?.children?.find((child) => child?.props?.style?.background === 'currentColor');
+    const on = switchesIn(rowOf(tree, 'hivemem'));
+    const off = switchesIn(rowOf(tree, 'chrome-main'));
+    assert(ringOf(on[0]) !== undefined && ringOf(on[1]) !== undefined, 'a checked switch has no ring');
+    assert(dotIn(on[0]) !== undefined && dotIn(on[1]) !== undefined, 'a checked switch has no dot');
+    assert(dotIn(off[0]) === undefined && dotIn(off[1]) === undefined, 'an unchecked switch still shows a dot');
+    assert(ringOf(off[0]).props.style.opacity === '.5', `the off ring is ${ringOf(off[0]).props.style.opacity}`);
+    assert(ringOf(on[0]).props.style.width === '11px' && ringOf(off[0]).props.style.width === '11px',
+      'the ring changes size between states');
   });
 
   check('the two switches report independent states', () => {
@@ -558,6 +595,27 @@ const fakeCtx = {
     assert(menu.style.maxHeight === 320, `maxHeight is ${menu.style.maxHeight}`);
     assert(menu.style.width === 320, `width is ${menu.style.width} (two switches need room)`);
     assert(typeof menu.style.left === 'number' && typeof menu.style.bottom === 'number', 'missing coordinates');
+  });
+
+  check('the usage hint is collapsed behind a "?" button', () => {
+    const hintNodes = (view) => find(view, (element) => element.props?.['data-context-control'] === 'hint');
+    const toggleIn = (view) => find(view, (element) => element.props?.['data-context-control'] === 'hint-toggle')[0];
+    tree = mount({ type: Pill, props: { sessionId: 's1' } });
+    const toggle = toggleIn(tree);
+    assert(toggle !== undefined, 'no hint toggle in the popover');
+    assert(hintNodes(tree).length === 0, 'the hint paragraph is printed before the button is pressed');
+    assert(toggle.props['aria-expanded'] === 'false', `aria-expanded is ${toggle.props['aria-expanded']}`);
+
+    toggle.props.onClick();
+    tree = mount({ type: Pill, props: { sessionId: 's1' } });
+    const opened = hintNodes(tree)[0];
+    assert(opened !== undefined, 'pressing "?" did not reveal the hint');
+    assert(textOfNode(opened).includes('会话级优先'), `hint reads "${textOfNode(opened)}"`);
+    assert(toggleIn(tree).props['aria-expanded'] === 'true', 'aria-expanded did not follow the toggle');
+
+    toggleIn(tree).props.onClick();
+    tree = mount({ type: Pill, props: { sessionId: 's1' } });
+    assert(hintNodes(tree).length === 0, 'pressing "?" again did not collapse the hint');
   });
 
   check('first row takes focus when the popover opens', () => {
@@ -842,6 +900,21 @@ const fakeCtx = {
     assert(extra.length === 0, `the ⟳ button repeats the check action (${extra.length} extra)`);
     assert(textOf(actionOf(footer)) === '检查更新', 'the text check button is missing');
   });
+
+  /* A check that the host answers from its cache takes milliseconds; without
+   * an immediate busy state the click looks like it did nothing. */
+  check('clicking check enters the checking phase before the answer lands', () => {
+    actionOf(updateTree).props.onClick();
+    updateTree = mount({ type: Pill, props: { sessionId: 's1' } });
+    const action = actionOf(updateTree);
+    assert(action.props['data-context-control-phase'] === 'checking',
+      `phase right after the click is ${action.props['data-context-control-phase']}`);
+    assert(textOf(action).includes('检查中'), `action reads "${textOf(action)}"`);
+    const spinner = find(action, (element) => element.props?.style?.animation !== undefined);
+    assert(spinner.length === 1, `the busy button shows ${spinner.length} spinners`);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  updateTree = mount({ type: Pill, props: { sessionId: 's1' } });
 
   fetchMode = 'local';
   actionOf(updateTree).props.onClick();
