@@ -299,9 +299,12 @@ const FIXTURES = { s1: LIST, s2: LIST_S2, s3: LIST_OLD };
 const DICT_ZH = {
   panel: '组件上下文', none: '无', mcp: 'MCP', skill: 'Skill', tool: '工具', official: '官方', custom: '自配',
   scopeSession: '会话', scopeWorkspace: '工作区',
-  scopeSessionTitle: '会话级：只影响本会话，不写入项目默认值',
-  scopeWorkspaceTitle: '工作区级：写入本项目默认值；本会话没有自己的选择时立即生效，新会话继承',
-  hint: '每个条目两个开关，会话级优先：「会话」只影响本会话；「工作区」写入项目默认值，新会话继承（下次请求生效）', on: '已启用：', busy: '…',
+  hint: '使用说明：每个条目右侧设有两个开关，分别为会话级（蓝色圆点）与工作区级（紫色圆点）。\n'
+    + '会话级仅作用于当前会话，重新打开该会话时（含宿主重启后）仍保留；会话归档后恢复，则重新继承工作区级设置。\n'
+    + '工作区级写入本项目的默认值：本会话未对该条目单独设置时立即采用，此后在本项目新建的会话继承该值。\n'
+    + '两者同时存在时，会话级设置优先。所有变更在下次模型请求时生效。',
+  pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具', hintToggle: '使用说明',
+  on: '已启用：', busy: '…',
   checkUpdate: '检查更新', checking: '检查中…', upToDate: '已是最新', available: '可升级',
   upgrade: '一键升级', upgrading: '升级中…', upgraded: '已升级',
   upgradedHint: '已升级，重启 dsh web 后生效', reload: '刷新页面', failed: '升级失败', retry: '重试', details: '详情',
@@ -524,12 +527,15 @@ const fakeCtx = {
       assert(pair.length === 2, `${row.props['aria-label']} has ${pair.length} switches`);
       assert(pair.map((sw) => sw.props['data-context-control-scope']).join(',') === 'session,workspace',
         `${row.props['aria-label']} switches are ${pair.map((sw) => sw.props['data-context-control-scope'])}`);
-      /* No visible text any more: the name is in the accessible label and the
-       * tooltip. The session dot is blue, the workspace dot violet. */
+      /* No visible text any more: the name is in the accessible label, and the
+       * colours are explained in the usage note. A hover card on a control
+       * that sits two pixels from its twin would cover the row it explains. */
       assert(pair[0].props['aria-label'].endsWith('· 会话') && pair[1].props['aria-label'].endsWith('· 工作区'),
         `${row.props['aria-label']} names are ${pair.map((sw) => sw.props['aria-label'])}`);
       assert(textOfNode(pair[0]) === '' && textOfNode(pair[1]) === '',
         `${row.props['aria-label']} still prints a label: ${pair.map(textOfNode)}`);
+      assert(!('title' in pair[0].props) && !('title' in pair[1].props),
+        `${row.props['aria-label']} still has a hover title: ${pair.map((sw) => sw.props.title)}`);
       assert(pair[0].props.style.color.includes('--dsw-alias-state-business-primary'),
         `session colour is ${pair[0].props.style.color}`);
       assert(pair[1].props.style.color === '#8b5cf6', `workspace colour is ${pair[1].props.style.color}`);
@@ -623,12 +629,25 @@ const fakeCtx = {
     const footer = find(tree, (element) => element.props?.['data-context-control'] === 'update')[0];
     assert(find(footer, (element) => element === toggle).length === 1,
       'the "?" button is not part of the update row');
+    /* The update controls read left to right from the version outwards, and
+     * only the "?" is pushed to the far right: an auto margin on anything else
+     * would tear the version away from the button that acts on it. */
+    const updateRow = find(tree, (element) => element.props?.['data-context-control'] === 'update-row')[0];
+    assert(textOfNode(updateRow.children[0]).startsWith('v'),
+      `the update row starts with ${textOfNode(updateRow.children[0])}`);
+    assert(updateRow.children.at(-1) === toggle, 'the "?" is not the last control in the row');
+    assert(toggle.props.style.marginLeft === 'auto', `the "?" margin is ${toggle.props.style.marginLeft}`);
 
     toggle.props.onClick();
     tree = mount({ type: Pill, props: { sessionId: 's1' } });
     const opened = hintNodes(tree)[0];
     assert(opened !== undefined, 'pressing "?" did not reveal the hint');
-    assert(textOfNode(opened).includes('会话级优先'), `hint reads "${textOfNode(opened)}"`);
+    const hintText = textOfNode(opened);
+    /* Written prose, not shorthand: it has to state when a change lands. */
+    assert(hintText.includes('会话级设置优先'), `hint reads "${hintText}"`);
+    assert(hintText.includes('下次模型请求时生效'), `hint does not say when a change lands: "${hintText}"`);
+    assert(hintText.split('\n').length === 4, `hint is ${hintText.split('\n').length} lines`);
+    assert(opened.props.style.whiteSpace === 'pre-line', 'the note would collapse into one paragraph');
     assert(toggleIn(tree).props['aria-expanded'] === 'true', 'aria-expanded did not follow the toggle');
 
     toggleIn(tree).props.onClick();

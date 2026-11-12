@@ -4,6 +4,24 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.7.3 — 2026-11-12
+
+- **The update controls and the "?" swapped sides.** The version, the status
+  text and the check button now sit flush left, and only the "?" is pushed to
+  the far right by an auto margin, so the version and the button that acts on it
+  stay together.
+- **The dots lost their hover cards.** Two toggles sit two pixels apart, so a
+  tooltip on one covered the row it was explaining; the colours are described
+  once in the note behind the "?" instead. The accessible name still says
+  `entry · session` / `entry · workspace`.
+- **The usage note is written prose now.** Four lines: what each dot is, that a
+  session choice survives reopening the conversation (including after a host
+  restart) while a restored archive inherits the workspace again, how the
+  workspace default is adopted, that the session scope wins when both exist, and
+  that every change takes effect on the next model request. The lines are
+  preserved (`white-space: pre-line`) instead of collapsing into one paragraph.
+- The collapsed pill's tooltip is a single line again; the full note lives
+  behind the "?".
 ## 0.7.2 — 2026-11-12
 
 - **The row fits again.** Rows are divs now (they were buttons before 0.7.0,

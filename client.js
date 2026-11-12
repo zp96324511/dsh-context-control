@@ -199,9 +199,11 @@ window.__ModuleLoader__.load({
         custom: '自配',
         scopeSession: '会话',
         scopeWorkspace: '工作区',
-        scopeSessionTitle: '会话级：只影响本会话；重新打开本会话（含重启后）仍是这个状态，归档后恢复则重新继承工作区',
-        scopeWorkspaceTitle: '工作区级：写入本项目默认值；本会话没有自己的选择时立即生效，新会话继承',
-        hint: '每个条目两个圆点：蓝＝会话级（只影响本会话，重新打开仍保留；归档后恢复重新继承工作区），紫＝工作区级（本项目默认值，新会话继承）；悬停看说明，会话级优先',
+        hint: '使用说明：每个条目右侧设有两个开关，分别为会话级（蓝色圆点）与工作区级（紫色圆点）。\n'
+          + '会话级仅作用于当前会话，重新打开该会话时（含宿主重启后）仍保留；会话归档后恢复，则重新继承工作区级设置。\n'
+          + '工作区级写入本项目的默认值：本会话未对该条目单独设置时立即采用，此后在本项目新建的会话继承该值。\n'
+          + '两者同时存在时，会话级设置优先。所有变更在下次模型请求时生效。',
+        pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具',
         hintToggle: '使用说明',
         on: '已启用：',
         busy: '…',
@@ -237,9 +239,11 @@ window.__ModuleLoader__.load({
         custom: 'custom',
         scopeSession: 'session',
         scopeWorkspace: 'workspace',
-        scopeSessionTitle: 'session scope: this conversation only, kept when it is reopened (a conversation restored from the archive starts from the workspace again)',
-        scopeWorkspaceTitle: 'workspace scope: saved as this workspace\u2019s default; applied here when this conversation has no choice of its own, inherited by new sessions',
-        hint: 'Two dots per entry: blue is the session scope (this conversation only, kept when it is reopened; restoring from the archive starts from the workspace), violet is the workspace scope (the project default that new sessions inherit). Hover for details; the session wins',
+        hint: 'Usage: each entry has two switches on its right — the session scope (blue) and the workspace scope (violet).\n'
+          + 'The session scope applies to the current conversation only and is retained when that conversation is reopened, including after a host restart; a conversation restored from the archive inherits the workspace scope again.\n'
+          + 'The workspace scope writes this project\u2019s default: it is adopted at once by a conversation that has no choice of its own for that entry, and conversations opened in this project later inherit it.\n'
+          + 'When both are set, the session scope takes precedence. Every change takes effect on the next model request.',
+        pillHint: 'Components: click to switch MCP servers, skills and built-in tools on or off',
         hintToggle: 'Usage notes',
         on: 'Enabled: ',
         busy: '…',
@@ -422,6 +426,9 @@ window.__ModuleLoader__.load({
       },
       hintText: {
         padding: '0 8px 4px', fontSize: '11px', lineHeight: '16px',
+        /* The note is written as separate lines; without this the line breaks
+         * collapse into one dense paragraph. */
+        whiteSpace: 'pre-line',
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
       },
       error: {
@@ -449,7 +456,9 @@ window.__ModuleLoader__.load({
         fontVariantNumeric: 'tabular-nums',
       },
       footerNote: {
-        flex: '1 1 auto', minWidth: 0,
+        /* Takes only what it needs: a growing note would push the buttons to
+         * the right, and the update controls belong beside the version. */
+        flex: '0 1 auto', minWidth: 0,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
       },
@@ -914,7 +923,10 @@ window.__ModuleLoader__.load({
           const log = update.job?.log
           const tail = typeof log === 'string' && log !== '' ? log.slice(-2400) : undefined
           return h('div', { style: CSS.footer, 'data-context-control': 'update' },
-            h('div', { style: CSS.footerRow },
+            /* The update controls stay on the left, flush with the version and
+             * the note; only the "?" is pushed to the far right by an auto
+             * margin, so the two groups never trade places. */
+            h('div', { style: CSS.footerRow, 'data-context-control': 'update-row' },
               h('span', { style: CSS.version }, `v${info?.current ?? '—'}`),
               h('span', { style: noteStyle, title: note }, note),
               tail === undefined ? null : h('button', {
@@ -958,7 +970,9 @@ window.__ModuleLoader__.load({
                 'aria-expanded': showHint ? 'true' : 'false',
                 'aria-label': t('hintToggle'),
                 title: t('hintToggle'),
-                style: showHint ? { ...CSS.hintButton, ...CSS.hintButtonOn } : CSS.hintButton,
+                style: showHint
+                  ? { ...CSS.hintButton, ...CSS.hintButtonOn, marginLeft: 'auto' }
+                  : { ...CSS.hintButton, marginLeft: 'auto' },
                 onClick: onToggleHint,
               }, '?'),
             ),
@@ -977,11 +991,13 @@ window.__ModuleLoader__.load({
          * A pending update adds one line — the badge exists to be noticed from
          * the collapsed state, not only after a click. */
         function pillTitle(servers, skills, tools, data) {
-          if (data === undefined) return t('hint');
+          /* The pill keeps a one-line tooltip: the long usage note lives behind
+           * the "?" in the popover, not in a hover card on the composer. */
+          if (data === undefined) return t('pillHint');
           const on = [...servers, ...skills, ...tools]
             .filter((entry) => entry.enabled)
             .map((entry) => entry.name);
-          return on.length === 0 ? t('hint') : `${t('hint')}\n${t('on')}${on.join('、')}`;
+          return on.length === 0 ? t('pillHint') : `${t('pillHint')}\n${t('on')}${on.join('、')}`;
         }
 
         /* Collapsed pill in the composer tool row, right of the permission
@@ -1214,11 +1230,15 @@ window.__ModuleLoader__.load({
              * Not `disabled` while busy: a disabled focused button drops
              * keyboard focus on every toggle, so busy is enforced in the
              * click handlers and announced through aria-disabled. */
+            /* No tooltip on the dots: the colours are explained once behind the
+             * "?" at the bottom, and a hover card on a two-state control that
+             * sits two pixels from its twin only gets in the way. The
+             * accessible name still spells out which scope a dot is. */
             const specs = [
-              { scope: 'session', label: t('scopeSession'), title: t('scopeSessionTitle'), checked: entry.enabled === true },
+              { scope: 'session', label: t('scopeSession'), checked: entry.enabled === true },
               /* A pre-0.7.0 host has no workspace state to report; its one
                * switch was the workspace default, so mirror `enabled` there. */
-              { scope: 'workspace', label: t('scopeWorkspace'), title: t('scopeWorkspaceTitle'), checked: (entry.workspace ?? entry.enabled) === true },
+              { scope: 'workspace', label: t('scopeWorkspace'), checked: (entry.workspace ?? entry.enabled) === true },
             ];
             return h('div', {
               key: entryKey,
@@ -1257,7 +1277,6 @@ window.__ModuleLoader__.load({
                 'aria-checked': spec.checked ? 'true' : 'false',
                 'aria-disabled': snapshot.busy ? 'true' : 'false',
                 'aria-label': `${entry.name} · ${spec.label}`,
-                title: spec.title,
                 'data-context-control': 'scope',
                 'data-context-control-scope': spec.scope,
                 'data-context-control-entry': entryKey,

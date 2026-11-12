@@ -1,6 +1,6 @@
 # dsh-context-control
 
-Visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on, and each row shows what the resource does. **Each entry has two radio dots** (blue = session, violet = workspace; hover for details) — `session` changes this conversation only, `workspace` stores a project default that this session adopts at once and every later session in the same project inherits (a session's own choice still wins). The plugin also **carries its own update channel**: it can tell you it is behind and upgrade itself in one click. After an upgrade it only tells you to restart `dsh web` — how the host was started is the user's business, not the plugin's.
+Visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on, and each row shows what the resource does. **Each entry has two radio dots** (blue = session, violet = workspace; the note behind the "?" at the bottom explains both) — `session` changes this conversation only, `workspace` stores a project default that this session adopts at once and every later session in the same project inherits (a session's own choice still wins). The plugin also **carries its own update channel**: it can tell you it is behind and upgrade itself in one click. After an upgrade it only tells you to restart `dsh web` — how the host was started is the user's business, not the plugin's.
 
 English | [中文](README.zh.md)
 
@@ -217,10 +217,12 @@ through `aria-description`.
   that opens the gate, and hiding it would lock the gate from the inside.
 - MCP tools are not listed individually (they follow their server switch), and
   `list_mcp_resources` and friends follow the server switch too.
-- The version row carries a `?` button at its right: the usage note is collapsed
-  behind it and only takes room when opened. The same row holds the check button,
-  which switches to a spinning \u201cchecking\u201d state immediately, so an answer the host
-  serves from its cache in milliseconds does not look like a click that did nothing.
+- The footer row reads left to right as version, status text (`checking…`,
+  `up to date`), then the check button \u2014 all flush left \u2014 with the `?` alone at the
+  far right. The usage note is collapsed behind that `?` and only takes room when
+  opened. The check button switches to a spinning \u201cchecking\u201d state immediately, so an
+  answer the host serves from its cache in milliseconds does not look like a click
+  that did nothing.
 - A row's second line is never empty: it shows the resource's description when it
   publishes one, and the entry's own detail otherwise (tool count for an MCP server,
   origin for a skill). An MCP server can only be described from the `instructions` it
