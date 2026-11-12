@@ -1,6 +1,6 @@
 # dsh-context-control
 
-Session-scoped visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on for that session, and each row shows what the resource does. The choice is remembered per project. The plugin also **carries its own update channel**: it can tell you it is behind and upgrade itself in one click. After an upgrade it only tells you to restart `dsh web` — how the host was started is the user's business, not the plugin's.
+Visibility gating for MCP servers, skills and built-in tools in the DeepSeek Harness web profile: new sessions start lean (official entries on, user-configured ones off), the model or the composer panel turns entries on, and each row shows what the resource does. **Each entry has two switches** — `session` changes this conversation only, `workspace` stores a project default that this session adopts at once and every later session in the same project inherits (a session's own choice still wins). The plugin also **carries its own update channel**: it can tell you it is behind and upgrade itself in one click. After an upgrade it only tells you to restart `dsh web` — how the host was started is the user's business, not the plugin's.
 
 English | [中文](README.zh.md)
 
@@ -125,6 +125,50 @@ The `Publish` workflow runs on the tag: it checks `tag == version`, runs `npm ru
 
 ## Configuration
 
+### Session scope vs workspace scope
+
+Every row in the panel ends in two switches, and the `context_control` tool
+takes the same choice as a `scope` argument:
+
+| `scope` | What it writes | What it reaches |
+|---|---|---|
+| `session` (default) | the `sessions` table of the `context_control` domain, keyed by session id (with the `cwd` it was made in) | this session alone; reopening that conversation — even after a host restart — brings the choice back (an archived one starts from the workspace again) |
+| `workspace` | an explicit choice in the project record (the `projects` table of the same domain, keyed by `cwd`) | this session immediately, and every session started in that directory afterwards |
+
+- A workspace's effective state is the configuration defaults (`defaultOn`,
+  `defaultOff`, `officialServers`, `defaultOnSkills`, `defaultOffTools`, …)
+  **overlaid** with the record's explicit choices. Entries the record does not
+  mention keep following the configuration, so editing the config still moves
+  everything nobody has pinned.
+- A new session copies the workspace state when it opens, then overlays its own
+  session record if that conversation was adjusted before. Sessions that are
+  already open are never dragged around by somebody else's `workspace` write —
+  that separation is the point of the two switches.
+- A `workspace` write stores **the entry that was toggled**, not the whole
+  session state: turning `read` off does not silently pin `bash`'s default too.
+- The two switches may legitimately disagree: **the session switch outranks the
+  workspace one**. A `workspace` write changes the project default only and
+  never removes this conversation's own choice; the new default shows up here
+  immediately only when this conversation has no choice for that entry. The
+  `session` switch shows what this conversation actually runs with, the
+  `workspace` switch shows the project default.
+- The workspace record is keyed by the project directory; a session record is
+  keyed by session id and remembers the `cwd` it was made in, so a conversation
+  that moves to another directory does not carry its old overrides along. A
+  session without a working directory can only use the `session` switch.
+- Archiving a conversation **drops its record at once**: DSH exposes no
+  "session deleted" event, and archiving is the one "this conversation is
+  finished" signal it does give (the `archivedSessionIds` of the workspace
+  domain's root record, delivered as a `domain/changed` event). Archiving is
+  reversible, so a restored conversation starts from the workspace defaults of
+  that moment instead of reviving retired choices.
+- Records of conversations that were never archived are pruned on every write
+  — older than 180 days, or beyond 1000 records, oldest first.
+- Both tables live in the `context_control` domain (with the JSON backend that
+  is `$DSH_HOME/storages/context_control.json`, tables `projects` and
+  `sessions`): deleting that file clears the workspace defaults and every
+  session choice at once.
+
 ### Which skill roots are gated
 
 DSH skills are layered: `bundled` skills shipped with DSH and host-registered
@@ -151,7 +195,8 @@ in one of those roots, then look for `skill discovery failed` in the host log.
 ### Which tools are gated
 
 The panel lists each **gateable built-in tool** as its own row, alongside MCP
-servers and skills. The three kinds (MCP / skills / tools) are switched with
+servers and skills — with two switches per row (session / workspace, see
+above). The three kinds (MCP / skills / tools) are switched with
 tabs instead of stacking three groups; each tab shows its own `on/total`, and
 the pill sums the three: `Components 3/5`. Every row also carries a one-line
 description taken from the resource itself: tools use their schema
@@ -217,8 +262,8 @@ mklink /J "C:\path\to\dsh-context-control\node_modules" "C:\Users\<you>\AppData\
 (Recreate it after `nvm use` switches Node.)
 
 ```pwsh
-npm run check        # manifest guard + node --check + 21 update tests + host gating regression + 35 client regression tests
+npm run check        # manifest guard + node --check + 25 update tests + 6 host gating tests + 42 client regression tests
 npm test             # the two test suites only
 ```
 
-The client suite is offline: `test/client-harness.cjs` ships a mini React runtime, a stub gateway and a fake DOM, and drives the panel, keyboard navigation, multi-pane isolation and every phase of the update button (current → unavailable → available → upgrading → restart hint).
+The client suite is offline: `test/client-harness.cjs` ships a mini React runtime, a stub gateway and a fake DOM, and drives the panel (including the two scope switches per row and their independent states), keyboard navigation, multi-pane isolation and every phase of the update button (current → unavailable → available → upgrading → restart hint).

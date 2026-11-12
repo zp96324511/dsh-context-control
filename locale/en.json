@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Context Control",
-    "description": "Per-session MCP, skill and built-in tool visibility: new sessions start lean; toggle entries on demand from the composer panel or through the model, and every entry says what it does. Choices are remembered per project."
+    "description": "Visibility gating for MCP servers, skills and built-in tools: new sessions start lean; toggle entries on demand from the composer panel or through the model. Every row has two switches — session changes this conversation only, workspace stores a project default that new sessions inherit."
   }
 }

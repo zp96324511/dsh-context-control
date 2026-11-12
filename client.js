@@ -3,10 +3,14 @@
  *
  * A compact panel in the composer dock: a pill showing how many MCP servers,
  * skills and built-in tools are enabled for the current session; expanded,
- * one chip per entry with its origin badge (official / user-configured), a
- * one-line description and on/off state, grouped by kind. Toggling calls the
- * Host service over the Typert Gateway (`remote.contextControl`), the same
- * operations the `context_control` agent tool uses.
+ * one row per entry with its origin badge (official / user-configured), a
+ * one-line description and two switches — 会话 (this conversation only) and
+ * 工作区 (this workspace's default, inherited by sessions started here later).
+ * Toggling calls the Host service over the Typert Gateway
+ * (`remote.contextControl`), the same operations the `context_control` agent
+ * tool uses. The workspace switch is what the panel used to do always; the
+ * session switch is the new per-conversation override, so two sessions in one
+ * workspace no longer drag each other around.
  *
  * Each pill is session-scoped: the `conversation.input.left` slot hands it the
  * `sessionId` of the composer it sits in, so every composer on screen — the
@@ -29,13 +33,22 @@ window.__ModuleLoader__.load({
      * must mount its own; without this the panel's inject on
      * `remote.contextControl` parks forever ("waiting for service"). Shape
      * mirrors the Host half's ContextControlRemote: list(sessionId) and
-     * set(sessionId, kind, target, enabled), both direct invocations. */
+     * set(sessionId, kind, target, enabled, scope). `scope` is optional on the
+     * wire (acceptsUndefined) so a client bundle older than this one — or a
+     * newer host serving an older page — still speaks the same method.
+     *
+     * `workspace` on every listed entry is the workspace default, so the panel
+     * can paint both switches; `enabled` stays the session's own state. A host
+     * older than 0.7.0 does not send it: it predates the split, so its single
+     * switch was the workspace one, and the panel mirrors `enabled` into the
+     * workspace switch instead of failing the whole list. */
     const entrySchema = {
       type: 'object',
       properties: {
         kind: { type: 'string', enum: ['mcp', 'skill', 'tool'] },
         name: { type: 'string' },
         enabled: { type: 'boolean' },
+        workspace: { type: 'boolean' },
         official: { type: 'boolean' },
         detail: { type: 'string' },
         description: { type: 'string' },
@@ -47,6 +60,7 @@ window.__ModuleLoader__.load({
       kind: zod.literal(kind),
       name: zod.string(),
       enabled: zod.boolean(),
+      workspace: zod.boolean().optional(),
       official: zod.boolean(),
       detail: zod.string(),
       description: zod.string().optional(),
@@ -64,6 +78,7 @@ window.__ModuleLoader__.load({
       kind: zod.string().optional(),
       name: zod.string().optional(),
       enabled: zod.boolean().optional(),
+      scope: zod.enum(['session', 'workspace']).optional(),
       note: zod.string().optional(),
     });
     const stringParam = (description) => ({
@@ -109,7 +124,7 @@ window.__ModuleLoader__.load({
           namespace: 'contextControl',
           method: 'set',
           service: 'contextControl',
-          description: 'Enable or disable one MCP server, skill or built-in tool for one session.',
+          description: 'Enable or disable one MCP server, skill or built-in tool, for this session or as this workspace\'s default.',
           invocation: { kind: 'direct' },
           parameters: [
             stringParam('session to modify'),
@@ -137,12 +152,23 @@ window.__ModuleLoader__.load({
               codec: { mode: 'strict', typeSymbol: 'dsh-context-control#enabled', create: () => zod.boolean(), jsonSchema: { type: 'boolean' } },
               strictCodec: { mode: 'strict', typeSymbol: 'dsh-context-control#enabled', create: () => zod.boolean(), jsonSchema: { type: 'boolean' } },
             },
+            {
+              name: 'scope',
+              description: 'where the choice applies: session (default) or workspace.',
+              source: 'json',
+              wire: 'scope',
+              /* Optional on the wire: an older client bundle sends four
+               * arguments and means session-only. */
+              acceptsUndefined: true,
+              codec: { mode: 'strict', typeSymbol: 'dsh-context-control#scope', create: () => zod.enum(['session', 'workspace']), jsonSchema: { type: 'string', enum: ['session', 'workspace'] } },
+              strictCodec: { mode: 'strict', typeSymbol: 'dsh-context-control#scope', create: () => zod.enum(['session', 'workspace']), jsonSchema: { type: 'string', enum: ['session', 'workspace'] } },
+            },
           ],
           result: {
             mode: 'strict',
             typeSymbol: 'dsh-context-control#contextControl/set:result',
             create: setResultSchema,
-            description: 'ok plus the changed entry, or ok=false with a reason.',
+            description: 'ok plus the changed entry and its scope, or ok=false with a reason.',
             jsonSchema: {
               type: 'object',
               properties: {
@@ -151,6 +177,7 @@ window.__ModuleLoader__.load({
                 kind: { type: 'string' },
                 name: { type: 'string' },
                 enabled: { type: 'boolean' },
+                scope: { type: 'string', enum: ['session', 'workspace'] },
                 note: { type: 'string' },
               },
               required: ['ok'],
@@ -170,7 +197,11 @@ window.__ModuleLoader__.load({
         tool: '工具',
         official: '官方',
         custom: '自配',
-        hint: '点击开关本会话的 MCP 服务器、技能与内置工具（下次请求生效，按项目记忆）',
+        scopeSession: '会话',
+        scopeWorkspace: '工作区',
+        scopeSessionTitle: '会话级：只影响本会话；重新打开本会话（含重启后）仍是这个状态，归档后恢复则重新继承工作区',
+        scopeWorkspaceTitle: '工作区级：写入本项目默认值；本会话没有自己的选择时立即生效，新会话继承',
+        hint: '每个条目两个开关，会话级优先：「会话」只影响本会话，重新打开本会话仍保留（归档后恢复重新继承工作区）；「工作区」写入项目默认值，新会话继承（下次请求生效）',
         on: '已启用：',
         busy: '…',
         checkUpdate: '检查更新',
@@ -203,7 +234,11 @@ window.__ModuleLoader__.load({
         tool: 'Tools',
         official: 'official',
         custom: 'custom',
-        hint: 'Click to toggle this session\u2019s MCP servers, skills and built-in tools (effective on the next request, remembered per project)',
+        scopeSession: 'session',
+        scopeWorkspace: 'workspace',
+        scopeSessionTitle: 'session scope: this conversation only, kept when it is reopened (a conversation restored from the archive starts from the workspace again)',
+        scopeWorkspaceTitle: 'workspace scope: saved as this workspace\u2019s default; applied here when this conversation has no choice of its own, inherited by new sessions',
+        hint: 'Two switches per entry, session first: \u201csession\u201d affects this conversation only and survives reopening it (restoring it from the archive starts from the workspace); \u201cworkspace\u201d writes the project default that new sessions inherit (effective on the next request)',
         on: 'Enabled: ',
         busy: '…',
         checkUpdate: 'Check for updates',
@@ -289,10 +324,10 @@ window.__ModuleLoader__.load({
       },
       menuRow: {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        gap: '10px', width: '100%',
-        padding: '5px 8px', border: 'none', borderRadius: '6px',
+        gap: '8px', width: '100%',
+        padding: '5px 8px', borderRadius: '6px',
         fontSize: '12px', lineHeight: '18px', textAlign: 'left',
-        background: 'transparent', cursor: 'pointer',
+        background: 'transparent',
         color: 'var(--dsw-alias-label-secondary, inherit)',
       },
       menuRowOn: {
@@ -313,8 +348,23 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       },
-      stateMark: {
-        fontSize: '11px', lineHeight: '16px', flex: 'none',
+      /* The two scope switches sit at the end of each row, side by side: a
+       * filled one is on, a hollow one is off. Same pill shape at the same
+       * height, so a row reads as one line whatever is on. */
+      switches: {
+        display: 'inline-flex', alignItems: 'center', gap: '3px', flex: 'none',
+      },
+      scopeSwitch: {
+        minWidth: '38px', padding: '0 6px',
+        border: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.35))`,
+        borderRadius: '6px', background: 'transparent', cursor: 'pointer',
+        fontSize: '10px', lineHeight: '17px', fontFamily: 'inherit',
+        color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
+        transition: 'background 80ms ease-out, border-color 80ms ease-out, color 80ms ease-out',
+      },
+      scopeSwitchOn: {
+        borderColor: 'var(--dsw-alias-state-business-primary, #247bbf)',
+        background: 'rgba(36,123,191,.14)',
         color: 'var(--dsw-alias-state-business-primary, #247bbf)',
       },
       badge: {
@@ -460,12 +510,17 @@ window.__ModuleLoader__.load({
           }
         }
 
-        /** Toggle one entry for one Session, then refresh that Session's state. */
-        async function toggleState(state, sessionId, kind, name, next) {
+        /**
+         * Toggle one entry for one Session, then refresh that Session's state.
+         * `scope` is 'session' (this conversation only) or 'workspace' (write
+         * the project default — the host also applies it to this session, so
+         * the refetch shows both switches moved).
+         */
+        async function toggleState(state, sessionId, kind, name, next, scope) {
           if (state.get().busy) return;
           state.patch({ busy: true, error: undefined });
           try {
-            const outcome = await remoteContextControl.set(sessionId, kind, name, next);
+            const outcome = await remoteContextControl.set(sessionId, kind, name, next, scope);
             if (!outcome.ok) throw new Error(outcome.error?.message ?? 'contextControl/set failed');
             if (outcome.value?.ok === false) throw new Error(outcome.value.reason ?? 'contextControl/set refused');
             state.patch({ busy: false });
@@ -923,7 +978,9 @@ window.__ModuleLoader__.load({
               const anchor = anchorRef.current;
               if (anchor === null) return;
               const rect = anchor.getBoundingClientRect();
-              const width = Math.min(280, window.innerWidth - 16);
+              /* Wide enough for two scope switches beside a name and a
+               * description; capped by the viewport on a phone. */
+              const width = Math.min(320, window.innerWidth - 16);
               const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
               /* The popover opens upward from the composer, so its height is capped
                * by the room above the anchor: a short viewport (phone, landscape, a
@@ -942,6 +999,9 @@ window.__ModuleLoader__.load({
               if (anchorRef.current !== null && anchorRef.current.contains(event.target)) return;
               onCloseRef.current(false);
             };
+            /* Rows are groups of two scope switches: up/down walks rows and
+             * keeps the column (session stays session), left/right moves
+             * between the two switches of the focused row. */
             const onKeyDown = (event) => {
               if (event.key === 'Escape') {
                 /* Escape hands focus back to the pill that owns this popover. */
@@ -949,20 +1009,42 @@ window.__ModuleLoader__.load({
                 return;
               }
               const rows = rowRefs.current.filter((row) => row != null);
-              const index = rows.indexOf(document.activeElement);
-              if (index === -1) return;
+              if (rows.length === 0) return;
+              const active = document.activeElement;
+              let rowIndex = -1;
+              let column = 0;
+              for (let index = 0; index < rows.length; index += 1) {
+                const found = rows[index].switches.indexOf(active);
+                if (found !== -1) {
+                  rowIndex = index;
+                  column = found;
+                  break;
+                }
+              }
+              if (rowIndex === -1) return;
+              const focus = (index, targetColumn) => {
+                const row = rows[(index + rows.length) % rows.length];
+                const target = row.switches[targetColumn];
+                if (target !== undefined && typeof target.focus === 'function') target.focus();
+              };
               if (event.key === 'ArrowDown') {
                 event.preventDefault();
-                rows[(index + 1) % rows.length].focus();
+                focus(rowIndex + 1, column);
               } else if (event.key === 'ArrowUp') {
                 event.preventDefault();
-                rows[(index - 1 + rows.length) % rows.length].focus();
+                focus(rowIndex - 1, column);
+              } else if (event.key === 'ArrowRight') {
+                event.preventDefault();
+                focus(rowIndex, column + 1);
+              } else if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                focus(rowIndex, column - 1);
               } else if (event.key === 'Home') {
                 event.preventDefault();
-                rows[0].focus();
+                focus(0, column);
               } else if (event.key === 'End') {
                 event.preventDefault();
-                rows[rows.length - 1].focus();
+                focus(rows.length - 1, column);
               }
             };
             document.addEventListener('pointerdown', onPointerDown, true);
@@ -977,8 +1059,9 @@ window.__ModuleLoader__.load({
             };
           }, [anchorRef]);
 
-          /* Keyboard entry: once the popover is placed, focus the first row so
-           * arrows/Enter work without a click (mouse users keep hover + click). */
+          /* Keyboard entry: once the popover is placed, focus the first row's
+           * session switch so arrows/Enter work without a click (mouse users
+           * keep hover + click on either switch). */
           const opened = pos !== undefined;
           useEffect(() => {
             if (!opened) return;
@@ -986,7 +1069,8 @@ window.__ModuleLoader__.load({
             if (rows.length === 0) return;
             const active = document.activeElement;
             if (menuRef.current !== null && active !== null && menuRef.current.contains(active)) return;
-            rows[0].focus({ preventScroll: true });
+            const first = rows[0].switches[0];
+            if (first !== undefined && typeof first.focus === 'function') first.focus({ preventScroll: true });
           }, [opened]);
 
           const servers = snapshot.data?.mcp ?? [];
@@ -1007,16 +1091,34 @@ window.__ModuleLoader__.load({
           const row = (entry) => {
             const index = rowIndex;
             rowIndex += 1;
+            rowRefs.current[index] = { row: null, switches: [] };
             const description = entry.description ?? '';
-            return h('button', {
-              key: `${entry.kind}:${entry.name}`,
-              ref: (element) => { rowRefs.current[index] = element ?? null; },
-              type: 'button',
-              role: 'switch',
-              'aria-checked': entry.enabled ? 'true' : 'false',
-              'aria-disabled': snapshot.busy ? 'true' : 'false',
+            const entryKey = `${entry.kind}:${entry.name}`;
+            /* Two switches per entry, at the end of the row: 会话 (this
+             * conversation only, never saved) and 工作区 (this workspace's
+             * default, which new sessions inherit). Either click sets that
+             * switch to its opposite; the two are independent, so a session
+             * can be off while the workspace default is on.
+             *
+             * Not `disabled` while busy: a disabled focused button drops
+             * keyboard focus on every toggle, so busy is enforced in the
+             * click handlers and announced through aria-disabled. */
+            const specs = [
+              { scope: 'session', label: t('scopeSession'), title: t('scopeSessionTitle'), checked: entry.enabled === true },
+              /* A pre-0.7.0 host has no workspace state to report; its one
+               * switch was the workspace default, so mirror `enabled` there. */
+              { scope: 'workspace', label: t('scopeWorkspace'), title: t('scopeWorkspaceTitle'), checked: (entry.workspace ?? entry.enabled) === true },
+            ];
+            return h('div', {
+              key: entryKey,
+              ref: (element) => {
+                const slot = rowRefs.current[index];
+                if (slot !== undefined) slot.row = element ?? null;
+              },
+              role: 'group',
               'aria-label': entry.name,
               'aria-description': description === '' ? undefined : description,
+              'data-context-control-row': entryKey,
               title: [description, entry.detail ?? ''].filter((part) => part !== '').join('\n'),
               style: entry.enabled ? { ...CSS.menuRow, ...CSS.menuRowOn } : CSS.menuRow,
               onMouseEnter: (event) => {
@@ -1024,18 +1126,6 @@ window.__ModuleLoader__.load({
               },
               onMouseLeave: (event) => {
                 event.currentTarget.style.background = 'transparent';
-              },
-              onFocus: (event) => {
-                event.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12))';
-              },
-              onBlur: (event) => {
-                event.currentTarget.style.background = 'transparent';
-              },
-              /* Deliberately not `disabled`: a disabled focused button drops keyboard
-               * focus on every toggle. Busy is enforced in the click handler. */
-              onClick: () => {
-                if (snapshot.busy) return;
-                void toggleState(state, sessionId, entry.kind, entry.name, !entry.enabled);
               },
             },
               h('span', { style: CSS.menuRowMain },
@@ -1045,7 +1135,28 @@ window.__ModuleLoader__.load({
                 ),
                 description === '' ? null : h('span', { style: CSS.menuDesc }, description),
               ),
-              h('span', { style: CSS.stateMark }, entry.enabled ? '●' : '○'),
+              h('span', { style: CSS.switches }, specs.map((spec, column) => h('button', {
+                key: spec.scope,
+                ref: (element) => {
+                  const slot = rowRefs.current[index];
+                  if (slot !== undefined) slot.switches[column] = element ?? null;
+                },
+                type: 'button',
+                role: 'switch',
+                'aria-checked': spec.checked ? 'true' : 'false',
+                'aria-disabled': snapshot.busy ? 'true' : 'false',
+                'aria-label': `${entry.name} · ${spec.label}`,
+                title: spec.title,
+                'data-context-control': 'scope',
+                'data-context-control-scope': spec.scope,
+                'data-context-control-entry': entryKey,
+                'data-context-control-state': spec.checked ? 'on' : 'off',
+                style: spec.checked ? { ...CSS.scopeSwitch, ...CSS.scopeSwitchOn } : CSS.scopeSwitch,
+                onClick: () => {
+                  if (snapshot.busy) return;
+                  void toggleState(state, sessionId, entry.kind, entry.name, !spec.checked, spec.scope);
+                },
+              }, spec.label))),
             );
           };
 
@@ -1086,7 +1197,8 @@ window.__ModuleLoader__.load({
               tabRefs.current[next.key]?.focus();
             } else if (event.key === 'ArrowDown') {
               event.preventDefault();
-              rowRefs.current.find((row) => row != null)?.focus();
+              const first = rowRefs.current.find((row) => row != null);
+              first?.switches[0]?.focus();
             } else if (event.key === 'Home') {
               event.preventDefault();
               const first = groups[0];

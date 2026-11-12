@@ -135,6 +135,15 @@ global.document = documentStub;
 global.window = windowStub;
 global.HTMLElement = class HTMLElement {};
 
+/* React invokes refs on every committed element, whatever its children are;
+ * this harness must too, or a button whose label is a plain string would never
+ * publish itself to a ref (and focus/keyboard navigation would silently die). */
+function attachRef(props, element) {
+  if (props?.ref === undefined || props?.ref === null) return;
+  if (typeof props.ref === 'function') props.ref(element);
+  else if (typeof props.ref === 'object') props.ref.current = element;
+}
+
 function render(node, parent, path = '') {
   if (node === null || node === undefined || node === false || node === true) return null;
   if (typeof node === 'string' || typeof node === 'number') {
@@ -177,14 +186,12 @@ function render(node, parent, path = '') {
   element.parent = parent;
   if (typeof props?.children === 'string' || typeof props?.children === 'number') {
     element.children = [render(props.children, element, `${path}/0`)];
+    attachRef(props, element);
     return element;
   }
   const kids = props?.children === undefined ? [] : [].concat(props.children);
   element.children = kids.map((kid, index) => render(kid, element, `${path}/${index}`)).filter(Boolean);
-  if (props?.ref !== undefined && props?.ref !== null) {
-    if (typeof props.ref === 'function') props.ref(element);
-    else if (typeof props.ref === 'object') props.ref.current = element;
-  }
+  attachRef(props, element);
   return element;
 }
 
@@ -236,31 +243,48 @@ const LIST = {
   sessionId: 's1',
   cwd: 'C:\\demo',
   mcp: [
-    { kind: 'mcp', name: 'hivemem', enabled: true, official: false, detail: '8 tools', description: '跨会话记忆：检索、写入与归档' },
-    { kind: 'mcp', name: 'chrome-main', enabled: false, official: false, detail: '32 tools', description: '' },
+    { kind: 'mcp', name: 'hivemem', enabled: true, workspace: true, official: false, detail: '8 tools', description: '跨会话记忆：检索、写入与归档' },
+    { kind: 'mcp', name: 'chrome-main', enabled: false, workspace: false, official: false, detail: '32 tools', description: '' },
   ],
   skills: [
-    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, official: true, detail: 'bundled', description: '诊断 Windows 沙箱 ACL 拒绝' },
+    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, workspace: true, official: true, detail: 'bundled', description: '诊断 Windows 沙箱 ACL 拒绝' },
   ],
   tools: [
-    { kind: 'tool', name: 'read', enabled: true, official: true, detail: '', description: '读取文件内容' },
-    { kind: 'tool', name: 'bash', enabled: false, official: true, detail: '', description: '' },
+    { kind: 'tool', name: 'read', enabled: true, workspace: true, official: true, detail: '', description: '读取文件内容' },
+    { kind: 'tool', name: 'bash', enabled: false, workspace: false, official: true, detail: '', description: '' },
   ],
 };
 
 /* A second Session with a different surface: the harness mounts both at once
- * to stand in for two mixer panes. */
+ * to stand in for two mixer panes. `chrome-p2` is off in this session but on
+ * in the workspace — the pair of switches must show exactly that. */
 const LIST_S2 = {
   sessionId: 's2',
   cwd: 'C:\\demo2',
-  mcp: [{ kind: 'mcp', name: 'chrome-p2', enabled: false, official: false, detail: '5 tools' }],
-  skills: [{ kind: 'skill', name: 'office', enabled: true, official: false, detail: 'user' }],
+  mcp: [{ kind: 'mcp', name: 'chrome-p2', enabled: false, workspace: true, official: false, detail: '5 tools' }],
+  skills: [{ kind: 'skill', name: 'office', enabled: true, workspace: true, official: false, detail: 'user' }],
   tools: [],
 };
 
+/* A host older than 0.7.0 (files upgraded, host still running the previous
+ * module) has no workspace state to report — its single switch was the
+ * workspace default. The panel must keep working and mirror that state. */
+const LIST_OLD = {
+  sessionId: 's3',
+  cwd: 'C:\\old',
+  mcp: [{ kind: 'mcp', name: 'hivemem', enabled: true, official: false, detail: '8 tools' }],
+  skills: [],
+  tools: [{ kind: 'tool', name: 'read', enabled: true, official: true, detail: '' }],
+};
+
+const FIXTURES = { s1: LIST, s2: LIST_S2, s3: LIST_OLD };
+
 const DICT_ZH = {
   panel: '组件上下文', none: '无', mcp: 'MCP', skill: 'Skill', tool: '工具', official: '官方', custom: '自配',
-  hint: '点击开关本会话的 MCP 服务器、技能与内置工具（下次请求生效，按项目记忆）', on: '已启用：', busy: '…',
+  scopeSession: '会话', scopeWorkspace: '工作区',
+  scopeSessionTitle: '会话级：只影响本会话，不写入项目默认值',
+  scopeWorkspaceTitle: '工作区级：写入本项目默认值；本会话没有自己的选择时立即生效，新会话继承',
+  hint: '每个条目两个开关，会话级优先：「会话」只影响本会话；「工作区」写入项目默认值，新会话继承（下次请求生效）', on: '已启用：', busy: '…',
   checkUpdate: '检查更新', checking: '检查中…', upToDate: '已是最新', available: '可升级',
   upgrade: '一键升级', upgrading: '升级中…', upgraded: '已升级',
   upgradedHint: '已升级，重启 dsh web 后生效', reload: '刷新页面', failed: '升级失败', retry: '重试', details: '详情',
@@ -349,11 +373,11 @@ const remoteCalls = [];
 const remoteContextControl = {
   async list(sessionId) {
     remoteCalls.push(['list', sessionId]);
-    return { ok: true, value: sessionId === 's2' ? LIST_S2 : LIST };
+    return { ok: true, value: FIXTURES[sessionId] ?? LIST };
   },
-  async set(sessionId, kind, target, enabled) {
-    remoteCalls.push(['set', sessionId, kind, target, enabled]);
-    return { ok: true, value: { ok: true } };
+  async set(sessionId, kind, target, enabled, scope) {
+    remoteCalls.push(['set', sessionId, kind, target, enabled, scope]);
+    return { ok: true, value: { ok: true, scope: scope ?? 'session' } };
   },
 };
 
@@ -463,30 +487,53 @@ const fakeCtx = {
   pillButton.props.onClick();
   tree = mount({ type: Pill, props: { sessionId: 's1' } });
 
-  if (process.env.DEBUG) {
-    console.log('DEBUG keys:', [...instances.keys()]);
-    console.log('DEBUG tags:', [...new Set(find(tree, () => true).map((element) => element.tag))]);
-    console.log('DEBUG anchors:', find(tree, (element) => element.props?.['data-context-control'] !== undefined)
-      .map((element) => element.props['data-context-control']));
-    console.log('DEBUG pill hooks:', JSON.stringify(
-      [...instances.entries()].find(([key]) => key.startsWith('SessionPill#'))?.[1].hooks?.[0],
-    ));
-  }
+  /* Rows are groups of two scope switches (会话 / 工作区), so every query goes
+   * through the row element, never through a bare list of switches. */
+  const rowList = (view) => find(view, (element) => element.props?.['data-context-control-row'] !== undefined);
+  const rowOf = (view, name) => rowList(view).find((row) => row.props['aria-label'] === name);
+  const switchesIn = (row) => find(row, (element) => element.props?.['role'] === 'switch');
+  const textOfNode = (node) => find(node, (element) => element.text !== undefined)
+    .map((element) => element.text).join('');
 
-  const switches = find(tree, (element) => element.props?.['role'] === 'switch');
-  check('the popover opens on the first non-empty tab', () => {
-    assert(switches.length === 2, `got ${switches.length} switch rows`);
-    assert(switches[0].props['aria-label'] === 'hivemem', `first row is ${switches[0].props['aria-label']}`);
+  check('the popover opens on the first non-empty tab, one row per entry', () => {
+    const rows = rowList(tree);
+    assert(rows.length === 2, `got ${rows.length} rows`);
+    assert(rows[0].props['aria-label'] === 'hivemem', `first row is ${rows[0].props['aria-label']}`);
+  });
+
+  check('every row carries one session switch and one workspace switch', () => {
+    for (const row of rowList(tree)) {
+      const pair = switchesIn(row);
+      assert(pair.length === 2, `${row.props['aria-label']} has ${pair.length} switches`);
+      assert(pair.map((sw) => sw.props['data-context-control-scope']).join(',') === 'session,workspace',
+        `${row.props['aria-label']} switches are ${pair.map((sw) => sw.props['data-context-control-scope'])}`);
+      assert(textOfNode(pair[0]) === '会话' && textOfNode(pair[1]) === '工作区',
+        `${row.props['aria-label']} labels are ${pair.map(textOfNode)}`);
+    }
+  });
+
+  check('the two switches report independent states', () => {
+    /* hivemem: on here and on in the workspace. */
+    const hivemem = switchesIn(rowOf(tree, 'hivemem'));
+    assert(hivemem[0].props['aria-checked'] === 'true' && hivemem[1].props['aria-checked'] === 'true',
+      `hivemem is ${hivemem.map((sw) => sw.props['aria-checked'])}`);
+    /* chrome-main: off here and off as a default — the pair must not be
+     * derived from one another. */
+    const chrome = switchesIn(rowOf(tree, 'chrome-main'));
+    assert(chrome[0].props['aria-checked'] === 'false' && chrome[1].props['aria-checked'] === 'false',
+      `chrome-main is ${chrome.map((sw) => sw.props['aria-checked'])}`);
+    assert(chrome[0].props['data-context-control-entry'] === 'mcp:chrome-main'
+      && chrome[1].props['data-context-control-entry'] === 'mcp:chrome-main', 'switches do not name their entry');
   });
 
   check('rows show a one-line description from the host', () => {
-    const textOf = (row) => find(row, (element) => element.text !== undefined)
-      .map((element) => element.text).join('');
-    assert(textOf(switches[0]).includes('跨会话记忆：检索、写入与归档'), `first row is ${textOf(switches[0])}`);
-    assert(switches[0].props['aria-description'] === '跨会话记忆：检索、写入与归档', 'aria-description missing');
-    assert(switches[0].props.title.includes('跨会话记忆'), `title is ${switches[0].props.title}`);
-    assert(!textOf(switches[1]).includes('跨会话'), `second row picked up a foreign description: ${textOf(switches[1])}`);
-    assert(switches[1].props['aria-description'] === undefined, 'empty description should stay absent');
+    const first = rowOf(tree, 'hivemem');
+    const second = rowOf(tree, 'chrome-main');
+    assert(textOfNode(first).includes('跨会话记忆：检索、写入与归档'), `first row is ${textOfNode(first)}`);
+    assert(first.props['aria-description'] === '跨会话记忆：检索、写入与归档', 'aria-description missing');
+    assert(first.props.title.includes('跨会话记忆'), `title is ${first.props.title}`);
+    assert(!textOfNode(second).includes('跨会话'), `second row picked up a foreign description: ${textOfNode(second)}`);
+    assert(second.props['aria-description'] === undefined, 'empty description should stay absent');
   });
 
   check('tabs carry on/total for every kind, with no cost estimate', () => {
@@ -509,37 +556,63 @@ const fakeCtx = {
     assert(menu !== undefined, 'no menu element');
     assert(menu.parent === documentStub.body, 'menu is not portaled to body');
     assert(menu.style.maxHeight === 320, `maxHeight is ${menu.style.maxHeight}`);
+    assert(menu.style.width === 320, `width is ${menu.style.width} (two switches need room)`);
     assert(typeof menu.style.left === 'number' && typeof menu.style.bottom === 'number', 'missing coordinates');
   });
 
   check('first row takes focus when the popover opens', () => {
-    assert(activeElement === switches[0], `focus is on ${activeElement?.props?.['aria-label'] ?? activeElement?.tag}`);
+    assert(activeElement === switchesIn(rowOf(tree, 'hivemem'))[0],
+      `focus is on ${activeElement?.props?.['aria-label'] ?? activeElement?.tag}`);
   });
 
-  check('ArrowDown moves focus to the next row', () => {
+  check('ArrowDown moves focus to the same column in the next row', () => {
     const prevented = keydown('ArrowDown');
     assert(prevented, 'ArrowDown was not handled');
-    assert(activeElement === switches[1], `focus is on ${activeElement?.props?.['aria-label'] ?? activeElement?.tag}`);
+    assert(activeElement === switchesIn(rowOf(tree, 'chrome-main'))[0],
+      `focus is on ${activeElement?.props?.['aria-label'] ?? activeElement?.tag}`);
   });
 
-  check('ArrowDown wraps from the last row to the first', () => {
-    keydown('ArrowUp');
-    keydown('ArrowUp');
-    assert(activeElement === switches[switches.length - 1], 'ArrowUp did not wrap backwards');
+  check('ArrowRight and ArrowLeft move between the two switches of one row', () => {
+    keydown('ArrowRight');
+    assert(activeElement === switchesIn(rowOf(tree, 'chrome-main'))[1], 'ArrowRight did not reach the workspace switch');
+    keydown('ArrowLeft');
+    assert(activeElement === switchesIn(rowOf(tree, 'chrome-main'))[0], 'ArrowLeft did not return to the session switch');
+  });
+
+  check('ArrowDown wraps between rows and keeps the column', () => {
+    keydown('ArrowRight');
     keydown('ArrowDown');
-    assert(activeElement === switches[0], 'ArrowDown did not wrap forwards');
+    assert(activeElement === switchesIn(rowOf(tree, 'hivemem'))[1],
+      `focus is on ${activeElement?.props?.['aria-label'] ?? activeElement?.tag}`);
+    keydown('ArrowDown');
+    assert(activeElement === switchesIn(rowOf(tree, 'chrome-main'))[1], 'ArrowDown did not wrap forward');
+    keydown('ArrowUp');
+    assert(activeElement === switchesIn(rowOf(tree, 'hivemem'))[1], 'ArrowUp did not wrap backward');
   });
 
   /* A toggle is refused while a request is in flight; let open-time load settle. */
   await new Promise((resolve) => setTimeout(resolve, 20));
   tree = mount({ type: Pill, props: { sessionId: 's1' } });
-  check('row click reaches the host remote with the right arguments', () => {
-    const rows = find(tree, (element) => element.props?.['role'] === 'switch');
+  check('a session switch reaches the host with scope=session', () => {
     const before = remoteCalls.length;
-    rows[1].props.onClick();
+    switchesIn(rowOf(tree, 'chrome-main'))[0].props.onClick();
     const call = remoteCalls[before];
     assert(call !== undefined && call[0] === 'set', 'click did not reach the remote');
-    assert(call[1] === 's1' && call[2] === 'mcp' && call[3] === 'chrome-main' && call[4] === true, JSON.stringify(call));
+    assert(call[1] === 's1' && call[2] === 'mcp' && call[3] === 'chrome-main' && call[4] === true,
+      JSON.stringify(call));
+    assert(call[5] === 'session', `scope is ${call[5]}`);
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  tree = mount({ type: Pill, props: { sessionId: 's1' } });
+  check('a workspace switch reaches the host with scope=workspace', () => {
+    const before = remoteCalls.length;
+    switchesIn(rowOf(tree, 'chrome-main'))[1].props.onClick();
+    const call = remoteCalls[before];
+    assert(call !== undefined && call[0] === 'set', 'click did not reach the remote');
+    assert(call[1] === 's1' && call[2] === 'mcp' && call[3] === 'chrome-main' && call[4] === true,
+      JSON.stringify(call));
+    assert(call[5] === 'workspace', `scope is ${call[5]}`);
   });
 
   /* Tabs: each kind renders alone, and the strip is reachable with arrows. */
@@ -547,10 +620,11 @@ const fakeCtx = {
     const tabs = find(tree, (element) => element.props?.['role'] === 'tab');
     tabs[2].props.onClick();
     tree = mount({ type: Pill, props: { sessionId: 's1' } });
-    const rows = find(tree, (element) => element.props?.['role'] === 'switch');
+    const rows = rowList(tree);
     assert(rows.length === 2, `tools tab rendered ${rows.length} rows`);
     assert(rows.map((row) => row.props['aria-label']).join(',') === 'read,bash',
       `tools tab rendered ${rows.map((row) => row.props['aria-label'])}`);
+    assert(switchesIn(rows[0]).length === 2, 'a tools row lost its two switches');
   });
 
   check('Left/Right on the tab strip switches kinds and takes focus', () => {
@@ -559,7 +633,7 @@ const fakeCtx = {
     strip.props.onKeyDown({ key: 'ArrowRight', preventDefault() { prevented = true; } });
     assert(prevented, 'ArrowRight on the strip was not handled');
     tree = mount({ type: Pill, props: { sessionId: 's1' } });
-    const rows = find(tree, (element) => element.props?.['role'] === 'switch');
+    const rows = rowList(tree);
     assert(rows.length === 2 && rows[0].props['aria-label'] === 'hivemem',
       'ArrowRight from the last tab did not wrap to the first kind');
     const tabs = find(tree, (element) => element.props?.['role'] === 'tab');
@@ -653,11 +727,21 @@ const fakeCtx = {
   panesTree = mount(panes());
 
   check('a toggle from one pane addresses that pane Session', () => {
-    const rows = find(panesTree, (element) => element.props?.['role'] === 'switch');
     const before = remoteCalls.length;
-    rows[0].props.onClick();
+    switchesIn(rowOf(panesTree, 'chrome-p2'))[0].props.onClick();
     const call = remoteCalls[before];
     assert(call !== undefined && call[0] === 'set' && call[1] === 's2', JSON.stringify(call));
+    assert(call[5] === 'session', `scope is ${call[5]}`);
+  });
+
+  /* The requirement this change exists for: one conversation can override an
+   * entry without touching the workspace default, and the pair shows both. */
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  panesTree = mount(panes());
+  check('an entry can be off in this session and on in the workspace', () => {
+    const pair = switchesIn(rowOf(panesTree, 'chrome-p2'));
+    assert(pair[0].props['aria-checked'] === 'false', `session switch is ${pair[0].props['aria-checked']}`);
+    assert(pair[1].props['aria-checked'] === 'true', `workspace switch is ${pair[1].props['aria-checked']}`);
   });
 
   pointerdown(documentStub.body);
@@ -665,6 +749,37 @@ const fakeCtx = {
 
   check('an outside pointerdown closes the pane popover', () => {
     assert(menusOf(panesTree).length === 0, 'popover survived an outside click');
+  });
+
+  /* A host older than 0.7.0 sends no `workspace`; the panel paints both
+   * switches from the single state it knows instead of failing the list. */
+  innerHeight = 800;
+  innerWidth = 1000;
+  anchorTop = 120;
+  instances = new Map();
+  nodeCache.clear();
+  activeElement = null;
+
+  const staleMenu = await (async () => {
+    const view = mount({ type: Pill, props: { sessionId: 's3' } });
+    const anchor = find(view, (element) => element.props?.['data-context-control'] === 'anchor')[0];
+    anchor.children[0].props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    return mount({ type: Pill, props: { sessionId: 's3' } });
+  })();
+
+  check('a pre-0.7.0 host still paints both switches', () => {
+    /* The popover opens on the first non-empty tab (mcp), which this host
+     * fills with one row; the tool row is checked by the same schema path. */
+    const rows = rowList(staleMenu);
+    assert(rows.length === 1, `got ${rows.length} rows`);
+    const pair = switchesIn(rows[0]);
+    assert(pair.length === 2, `got ${pair.length} switches`);
+    assert(pair[0].props['aria-checked'] === 'true' && pair[1].props['aria-checked'] === 'true',
+      `switches are ${pair.map((sw) => sw.props['aria-checked'])}`);
+    const rejected = find(staleMenu, (element) => typeof element.text === 'string'
+      && (element.text.includes('Expected') || element.text.includes('invalid')));
+    assert(rejected.length === 0, `the list was rejected by the client schema: ${rejected.map((element) => element.text)}`);
   });
 
   /* Small viewport: the popover must shrink instead of running off the top. */
@@ -684,7 +799,8 @@ const fakeCtx = {
   check('short viewport shrinks the popover height', () => {
     assert(smallMenu !== undefined, 'no menu on the small viewport');
     assert(smallMenu.style.maxHeight === 236, `maxHeight is ${smallMenu.style.maxHeight} on a 300px viewport`);
-    assert(smallMenu.style.width === 280, `width is ${smallMenu.style.width}`);
+    assert(smallMenu.style.width === 320, `width is ${smallMenu.style.width}`);
+    assert(rowList(small).length > 0, 'the shrunken popover lost its rows');
   });
 
   /* ---------------- update channel ----------------

@@ -4,6 +4,46 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.7.0 — 2026-11-12
+
+- **Two scopes per row.** Every entry (MCP server, skill, built-in tool) now
+  ends in two switches instead of one: `session` and `workspace`. Before this
+  release a single switch meant one thing — flipping it in one conversation
+  rewrote the project record and therefore the default of every conversation
+  after it, while conversations already open kept their own state anyway, so
+  the one button could never accurately describe what it had just done. The
+  panel now says which of the two it is doing, and the `context_control` tool
+  takes `scope` (`session` by default, matching the old in-conversation
+  intent; `workspace` to write the project default).
+- **Both scopes persist, in separate tables.** A `session` click is stored per
+  conversation (session id, together with the `cwd` it was made in) and comes
+  back when that conversation is reopened — including after a host restart; a
+  `workspace` click stores the project default and leaves this conversation's
+  own choice untouched (the session switch outranks it, so one row may show two
+  different answers — the session one is what the model runs with). Session records are pruned on write (older than 180
+  days, or beyond the 1000-record cap, oldest first), because DSH exposes no
+  "session deleted" event to hook; **archiving a conversation is the one
+  signal it does expose**, so that drops the record at once — a conversation
+  restored from the archive inherits the workspace again instead of reviving
+  choices the user retired.
+- The effective workspace state is the configured defaults overlaid with the
+  record's explicit choices, so `defaultOn` / `defaultOff` / `defaultOffTools`
+  still govern entries nobody has pinned, and toggling one entry no longer
+  freezes the rest of the workspace at whatever the clicking session happened
+  to look like.
+- New tool servers and tools that appear while the host runs, and skills that
+  are added later, now enter each session as the workspace says instead of as
+  "default on" — a late-arriving entry follows the project, not an accident of
+  discovery order.
+- The row is a `role="group"` with a `role="switch"` button per scope; the
+  popover grew to 320px, Left/Right move between the two switches of a row
+  while Up/Down keep the column across rows. The remote `set` descriptor's
+  `scope` parameter is optional, so an older client that never sends it keeps
+  working with session semantics; `workspace` in a `list` response is optional
+  too, so a client bundle that loads while the host still runs the previous
+  module paints both switches from the one state that host knows instead of
+  rejecting the whole list.
+
 ## 0.6.1 — 2026-11-10
 
 - `resolveDshHome()` now resolves the home the way DSH itself does

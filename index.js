@@ -52,12 +52,36 @@
  * - Both take effect on the next model request: the agent loop detects the
  *   changed tool surface and starts a new request series.
  *
- * Durable state: one `context-control` storage domain (json backend under
- * `$DSH_HOME/storages/`, `~/.dsh/storages/` by default), one record per project
- * (the session's cwd) holding the last chosen enabled sets. A new or resumed
- * session in the same project starts from that record; entries it does not
- * mention fall back to the configured defaults. MCP connections themselves stay
- * connected — this plugin controls model context, not processes.
+ * Two scopes, both exposed per entry:
+ * - session — what this conversation's model surface is. It starts as a copy of
+ *   the workspace choice, changes independently afterwards, and its overrides
+ *   are stored per conversation id, so reopening the conversation (after a host
+ *   restart too) starts from where the user left it.
+ * - workspace — the project default stored in the domain record, which every
+ *   new session in that project inherits. A workspace toggle writes the record
+ *   and applies the same value to the session that issued it only when that
+ *   session has no override for the entry: an explicit session choice outranks
+ *   the default, so the two switches may legitimately disagree, and the session
+ *   one is what this conversation's model sees. Other live sessions keep their
+ *   own state (an explicit workspace action is not a reason to change another
+ *   conversation's model surface under it).
+ * A session toggle never writes the project record, which is the point: turning
+ * something on in one conversation must not leak into the next one. It does
+ * write that conversation's own record, otherwise a restart would silently
+ * undo it.
+ *
+ * Durable state: one `context_control` storage domain (json backend under
+ * `$DSH_HOME/storages/`, `~/.dsh/storages/` by default) with two tables — one
+ * record per project (the session's cwd) holding the workspace choices, and one
+ * record per conversation holding its overrides. A new session in the same
+ * project starts from the project record; a reopened one from the project
+ * record overlaid with its own; entries neither mentions fall back to the
+ * configured defaults. Archiving a conversation drops its record (the workspace
+ * registry's archive set arrives as a `domain/changed` write), so a restored
+ * conversation inherits the project's current defaults; records left behind are
+ * also pruned by age and count on write, because DSH exposes no "session
+ * deleted" event a plugin could hook. MCP connections themselves stay connected
+ * — this plugin controls model context, not processes.
  */
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -154,7 +178,24 @@ const OFFICIAL_SKILL_SOURCES = new Set(['bundled', 'runtime'])
  */
 const SHADOW_SKILL_SOURCE = 'context-control-gated'
 
-/** Durable layout: one record per project cwd with the last chosen sets. */
+/**
+ * Session records are pruned on every write: DSH has no "session deleted"
+ * event a plugin can observe (sessions are files, and an archive or a delete
+ * happens outside the agent lifecycle), so age and count are what keeps the
+ * table bounded. A pruned record only costs a reopened session its override.
+ */
+const SESSION_RECORD_TTL_MS = 180 * 24 * 60 * 60 * 1000
+const SESSION_RECORD_LIMIT = 1000
+
+/**
+ * Durable layout, two tables:
+ * - `projects` — one record per project cwd holding the workspace (project
+ *   default) choices.
+ * - `sessions` — one record per conversation holding its own overrides, so
+ *   reopening it (after a restart too) starts where the user left it.
+ * A table addition is additive for the json backend: a stored unit without
+ * `sessions` opens with an empty one, so no version bump or migration.
+ */
 const PROJECT_DOMAIN = defineDomain({
   name: 'context_control',
   version: 1,
@@ -164,6 +205,15 @@ const PROJECT_DOMAIN = defineDomain({
       mcp: zod.record(zod.string(), zod.boolean()),
       skills: zod.record(zod.string(), zod.boolean()),
       /** Built-in tool overrides; absent in records written before 0.5.0. */
+      tools: zod.record(zod.string(), zod.boolean()).optional(),
+    })),
+    sessions: domainTable(zod.object({
+      /** Project the overrides were made in; a session that moves ignores the record. */
+      cwd: zod.string(),
+      /** Epoch ms of the last write, the pruning clock. */
+      at: zod.number(),
+      mcp: zod.record(zod.string(), zod.boolean()),
+      skills: zod.record(zod.string(), zod.boolean()),
       tools: zod.record(zod.string(), zod.boolean()).optional(),
     })),
   },
@@ -188,9 +238,17 @@ class ContextControlRemote extends TypertRemoteService {
   async remoteList(sessionId) {
     return this.ops.list(String(sessionId))
   }
-  /** Remote `set`: enable or disable one MCP server or skill for one session. */
-  async remoteSet(sessionId, kind, target, enabled) {
-    return this.ops.set(String(sessionId), String(kind), String(target), Boolean(enabled))
+  /**
+   * Remote `set`: enable or disable one MCP server, skill or tool for one
+   * session, or write that choice as the project's workspace default.
+   * `scope` is optional on the wire so an older client bundle keeps working;
+   * it means session-only.
+   */
+  async remoteSet(sessionId, kind, target, enabled, scope) {
+    return this.ops.set(
+      String(sessionId), String(kind), String(target), Boolean(enabled),
+      scope === 'workspace' ? 'workspace' : 'session',
+    )
   }
 }
 /* Plain-JS equivalent of @Remote('list') / @Remote('set') decorators: the
@@ -244,6 +302,9 @@ export async function apply(ctx, config) {
 
   /* ---------- durable per-project state ---------- */
 
+  /** cwd -> workspace record, kept in memory so a burst of toggles cannot lose one. */
+  const workspaceRecords = new Map()
+
   /** Read the stored record for one project; undefined when none is stored. */
   function storedFor(cwd) {
     if (domain === null || cwd === '') return undefined
@@ -255,17 +316,209 @@ export async function apply(ctx, config) {
     }
   }
 
-  /** Persist one session's current sets as its project's record. */
-  function persist(entry) {
-    if (domain === null || entry.cwd === '') return
-    const mcp = {}
-    for (const server of inventory.keys()) mcp[server] = entry.mcp.has(server)
-    const record = { mcp, skills: {}, tools: {} }
-    for (const name of entry.knownSkills) record.skills[name] = entry.skills.has(name)
-    for (const name of entry.knownTools) record.tools[name] = entry.tools.has(name)
-    domain.table('projects').put(entry.cwd, record).catch(
-      (error) => warn(ctx, `persisting state failed: ${String(error)}`),
-    )
+  /**
+   * The workspace record for one project: the user's explicit per-entry
+   * choices, nothing else (untouched entries keep following config defaults).
+   * Cached because a workspace toggle is a read-modify-write: the domain only
+   * publishes a put to memory after the backend accepted it, so re-reading the
+   * table between two quick toggles could still see the older record and drop
+   * the first one.
+   */
+  function workspaceRecord(cwd) {
+    if (cwd === '') return undefined
+    let record = workspaceRecords.get(cwd)
+    if (record === undefined) {
+      const stored = storedFor(cwd)
+      record = {
+        mcp: { ...(stored?.mcp ?? {}) },
+        skills: { ...(stored?.skills ?? {}) },
+        tools: { ...(stored?.tools ?? {}) },
+      }
+      workspaceRecords.set(cwd, record)
+    }
+    return record
+  }
+
+  /** Persist one project's workspace record; the stored value is a copy of the cache. */
+  function persistWorkspace(cwd) {
+    if (domain === null) return
+    const record = workspaceRecord(cwd)
+    if (record === undefined) return
+    domain.table('projects').put(cwd, {
+      mcp: { ...record.mcp },
+      skills: { ...record.skills },
+      tools: { ...record.tools },
+    }).catch((error) => warn(ctx, `persisting state failed: ${String(error)}`))
+  }
+
+  /* ---------- durable per-session state ---------- */
+
+  /** Entry kind (the tool/remote vocabulary) -> record field name. */
+  const SESSION_FIELDS = { mcp: 'mcp', skill: 'skills', tool: 'tools' }
+
+  /** sessionId -> { cwd, at, mcp, skills, tools }, the stored overrides for one conversation. */
+  const sessionRecords = new Map()
+  let sessionRecordsLoaded = false
+
+  /** Read the session table once; later writes update the cache, not the table snapshot. */
+  function loadSessionRecords() {
+    if (sessionRecordsLoaded) return
+    sessionRecordsLoaded = true
+    if (domain === null) return
+    try {
+      for (const [sessionId, value] of domain.table('sessions').entries()) {
+        sessionRecords.set(sessionId, {
+          cwd: typeof value.cwd === 'string' ? value.cwd : '',
+          at: Number.isFinite(value.at) ? value.at : 0,
+          mcp: { ...(value.mcp ?? {}) },
+          skills: { ...(value.skills ?? {}) },
+          tools: { ...(value.tools ?? {}) },
+        })
+      }
+    } catch (error) {
+      warn(ctx, `reading stored session state failed: ${String(error)}`)
+    }
+    dropRegistryArchivedSessions()
+  }
+
+  /**
+   * The stored overrides for one conversation, or undefined when it has none
+   * (or its last choices were made in another project: a session that moved
+   * starts from the new project's defaults rather than from a foreign record).
+   * @param sessionId - Conversation id (the agent id).
+   * @param cwd - Current project, or undefined to accept whatever the record holds.
+   */
+  function sessionRecordFor(sessionId, cwd = undefined) {
+    loadSessionRecords()
+    const record = sessionRecords.get(sessionId)
+    if (record === undefined) return undefined
+    if (cwd !== undefined && record.cwd !== cwd) return undefined
+    return record
+  }
+
+  /** Effective session sets: the workspace choice overlaid with this session's own overrides. */
+  function sessionMcp(sessionId, cwd) {
+    return overlay(workspaceMcp(cwd), sessionRecordFor(sessionId, cwd)?.mcp)
+  }
+
+  function sessionSkills(sessionId, cwd, known) {
+    return overlay(workspaceSkills(cwd, known), sessionRecordFor(sessionId, cwd)?.skills)
+  }
+
+  function sessionTools(sessionId, cwd, known) {
+    return overlay(workspaceTools(cwd, known), sessionRecordFor(sessionId, cwd)?.tools, known)
+  }
+
+  /**
+   * Write one session override and persist the record. The cache is the source
+   * of truth while the host runs: the domain publishes a put to memory only
+   * after the backend accepted it, so reading back between two quick toggles
+   * could see the older record and drop the first one.
+   * @param keepId - the record being written; pruning never touches it.
+   */
+  function persistSession(sessionId, cwd, apply) {
+    const table = domain === null ? undefined : domain.table('sessions')
+    let record = sessionRecords.get(sessionId)
+    if (record === undefined || record.cwd !== cwd) {
+      /* First overrides for this conversation, or it moved to another project:
+       * the old choices do not carry over. */
+      record = { cwd, at: 0, mcp: {}, skills: {}, tools: {} }
+    }
+    apply(record)
+    record.at = Date.now()
+    sessionRecords.set(sessionId, record)
+    if (table === undefined) return
+    table.put(sessionId, {
+      cwd: record.cwd,
+      at: record.at,
+      mcp: { ...record.mcp },
+      skills: { ...record.skills },
+      tools: { ...record.tools },
+    }).catch((error) => warn(ctx, `persisting session state failed: ${String(error)}`))
+    pruneSessionRecords(table, sessionId)
+  }
+
+  /**
+   * Put one live session back on the workspace choice: its own overrides are
+   * gone, so every entry it tracks returns to what the project says right now.
+   * Both surfaces are re-applied through the normal reconcile paths, which is
+   * what makes the change land on the next model request.
+   */
+  function resetEntryToWorkspace(entry) {
+    entry.mcp = workspaceMcp(entry.cwd)
+    entry.tools = workspaceTools(entry.cwd, entry.knownTools)
+    entry.skills = workspaceSkills(entry.cwd, entry.knownSkills)
+    reconcile(entry)
+    reconcileSkills(entry)
+  }
+
+  /** Drop one conversation's stored overrides entirely: the next time it opens it
+   * starts from the workspace choice, exactly like a conversation that never had
+   * any. A live agent falls back immediately, so a request in flight cannot keep
+   * the vanished choices alive. */
+  function forgetSessionRecord(sessionId) {
+    const stored = sessionRecords.delete(sessionId)
+    if (!stored) return
+    const entry = sessions.get(sessionId)
+    if (entry !== undefined) resetEntryToWorkspace(entry)
+    if (domain === null) return
+    try {
+      domain.table('sessions').delete(sessionId)
+        .catch((error) => warn(ctx, `dropping session state failed: ${String(error)}`))
+    } catch (error) {
+      warn(ctx, `dropping session state failed: ${String(error)}`)
+    }
+  }
+
+  /**
+   * Drop the stored choices of the sessions an archive set names. Archiving is
+   * the host's only "this conversation is finished" signal (there is no
+   * session/delete event), and it is deliberately reversible — so forgetting the
+   * record here is what makes a restored conversation inherit the project's
+   * current defaults instead of silently keeping choices the user retired.
+   */
+  function forgetArchivedSessions(archived) {
+    if (!Array.isArray(archived)) return
+    for (const sessionId of archived) forgetSessionRecord(String(sessionId))
+  }
+
+  /** Apply the archive set the workspace registry already holds (used once, when
+   * the session table is first read, for archives made before this host ran). */
+  function dropRegistryArchivedSessions() {
+    try {
+      forgetArchivedSessions(ctx.get('workspaceRegistry')?.archivedSessionIds)
+    } catch (error) {
+      warn(ctx, `reading the archive set failed: ${String(error)}`)
+    }
+  }
+
+  /**
+   * Drop expired records and keep the table bounded. `keepId` is the record the
+   * caller is writing right now; age never prunes it. Never throws: losing a
+   * cleanup must not fail the toggle that triggered it.
+   */
+  function pruneSessionRecords(table, keepId) {
+    const now = Date.now()
+    const doomed = []
+    for (const [sessionId, record] of sessionRecords) {
+      if (sessionId === keepId) continue
+      if (record.at !== 0 && now - record.at > SESSION_RECORD_TTL_MS) doomed.push(sessionId)
+    }
+    if (sessionRecords.size - doomed.length > SESSION_RECORD_LIMIT) {
+      const survivors = [...sessionRecords.entries()]
+        .filter(([sessionId]) => sessionId !== keepId && !doomed.includes(sessionId))
+        .sort((a, b) => a[1].at - b[1].at)
+      const excess = sessionRecords.size - doomed.length - SESSION_RECORD_LIMIT
+      for (const [sessionId] of survivors.slice(0, excess)) doomed.push(sessionId)
+    }
+    if (doomed.length === 0) return
+    const gone = new Set(doomed)
+    for (const sessionId of gone) sessionRecords.delete(sessionId)
+    try {
+      table.deleteMany(doomed).catch((error) => warn(ctx, `pruning session state failed: ${String(error)}`))
+    } catch (error) {
+      warn(ctx, `pruning session state failed: ${String(error)}`)
+    }
   }
 
   /* ---------- inventory scans ---------- */
@@ -476,6 +729,35 @@ export async function apply(ctx, config) {
     return enabled
   }
 
+  /** Apply explicit `name -> enabled` choices on top of a default set. */
+  function overlay(set, choices, known) {
+    if (choices === undefined) return set
+    for (const [name, on] of Object.entries(choices)) {
+      if (known !== undefined && !known.has(name)) continue
+      if (on) set.add(name)
+      else set.delete(name)
+    }
+    return set
+  }
+
+  /**
+   * The workspace (project-default) enabled sets: config defaults over the
+   * stored choices. A session copies these when it attaches, which is what
+   * "the session follows the project" means — and what a workspace toggle
+   * changes for the next session.
+   */
+  function workspaceMcp(cwd) {
+    return overlay(defaultsForMcp(), workspaceRecord(cwd)?.mcp)
+  }
+
+  function workspaceSkills(cwd, known) {
+    return overlay(defaultsForSkills(known), workspaceRecord(cwd)?.skills)
+  }
+
+  function workspaceTools(cwd, known) {
+    return overlay(defaultsForTools(known), workspaceRecord(cwd)?.tools, known)
+  }
+
   /** Tool names to deny for one entry: gated servers' tools, shared resource tools, disabled built-ins. */
   function denyFor(entry) {
     const deny = new Set()
@@ -505,16 +787,18 @@ export async function apply(ctx, config) {
   }
 
   /**
-   * Re-scan the unrestricted built-in view: add tools that appeared (enabled
-   * unless `defaultOffTools`), drop ones that vanished. Called while the
-   * restriction is lifted, so nothing this plugin hides is mistaken for gone.
+   * Re-scan the unrestricted built-in view: add tools that appeared, drop ones
+   * that vanished. Called while the restriction is lifted, so nothing this
+   * plugin hides is mistaken for gone. A tool this session has never had a
+   * choice for follows the workspace, exactly like a fresh attach.
    */
   function refreshBuiltinTools(entry) {
     const known = builtinToolInventory(entry.agent.ctx)
+    const enabled = sessionTools(entry.agent.id, entry.cwd, known)
     for (const name of known) {
       if (entry.knownTools.has(name)) continue
       entry.knownTools.add(name)
-      if (!cfg().defaultOffTools.includes(name)) entry.tools.add(name)
+      if (enabled.has(name)) entry.tools.add(name)
     }
     for (const name of [...entry.knownTools]) {
       if (known.has(name)) continue
@@ -523,17 +807,30 @@ export async function apply(ctx, config) {
     }
   }
 
+  /** Admit MCP servers that appeared after attach; each follows this session's effective choice. */
+  function refreshMcp(entry) {
+    const enabled = sessionMcp(entry.agent.id, entry.cwd)
+    for (const server of inventory.keys()) {
+      if (entry.knownMcp.has(server)) continue
+      entry.knownMcp.add(server)
+      if (enabled.has(server)) entry.mcp.add(server)
+    }
+  }
+
   /**
    * Lift and re-apply one agent's tool restriction for its current sets: MCP
    * servers and built-in tools share one `restrict` call, so the agent's view
-   * is computed once per change. `rescan` refreshes the built-in inventory
-   * first (used from `tools/change`); a set operation already knows it.
+   * is computed once per change. `rescan` refreshes both inventories first
+   * (used from `tools/change`); a set operation already knows them.
    */
   function reconcile(entry, rescan = false) {
     reconciling = true
     try {
       liftRestriction(entry)
-      if (rescan) refreshBuiltinTools(entry)
+      if (rescan) {
+        refreshMcp(entry)
+        refreshBuiltinTools(entry)
+      }
       const deny = denyFor(entry)
       if (deny.size === 0) return
       /* After the lift the full view is visible again. Filter to names this
@@ -618,10 +915,12 @@ export async function apply(ctx, config) {
     }
   }
 
-  /** Refresh one agent's skill knowledge (new skills default, vanished ones drop) and re-apply shadows. */
+  /** Refresh one agent's skill knowledge (new skills follow this session's effective choice,
+   * vanished ones drop) and re-apply shadows. */
   async function refreshSkills(entry) {
     const descriptions = new Map()
     const known = await skillInventory(entry.cwd, entry.agent, descriptions)
+    const enabled = sessionSkills(entry.agent.id, entry.cwd, known)
     for (const [name, source] of known) {
       /* A shadow masks the real origin and description; keep the ones learned before gating. */
       if (source !== SHADOW_SKILL_SOURCE) {
@@ -633,11 +932,7 @@ export async function apply(ctx, config) {
       }
       if (!entry.knownSkills.has(name)) {
         entry.knownSkills.add(name)
-        const c = cfg()
-        if (!c.defaultOffSkills.includes(name)
-          && (c.defaultOnSkills.includes(name) || OFFICIAL_SKILL_SOURCES.has(source))) {
-          entry.skills.add(name)
-        }
+        if (enabled.has(name)) entry.skills.add(name)
       }
     }
     for (const name of [...entry.knownSkills]) {
@@ -651,35 +946,24 @@ export async function apply(ctx, config) {
     reconcileSkills(entry)
   }
 
-  /** Attach gating state to one agent: init from the project record, apply the tool restriction and skill shadows.
-   * Tool gating lands synchronously before the first await, so a new agent's first assembly cannot slip past it;
-   * skill shadows follow discovery. The agent/created listener awaits this whole call. */
+  /** Attach gating state to one agent: the session starts from the workspace choice
+   * overlaid with its own stored overrides, then the tool restriction and skill shadows are
+   * applied. Tool gating lands synchronously before the first await, so a new agent's first
+   * assembly cannot slip past it; skill shadows follow discovery. The agent/created
+   * listener awaits this whole call. */
   async function attach(agent) {
     if (sessions.has(agent.id)) return
     scanGlobal()
     scanAgentTools(agent)
     const cwd = agent.session.header.cwd ?? ''
-    const stored = storedFor(cwd)
-    const mcp = defaultsForMcp()
-    if (stored !== undefined) {
-      for (const [server, on] of Object.entries(stored.mcp ?? {})) {
-        if (on) mcp.add(server)
-        else mcp.delete(server)
-      }
-    }
     /* Read the built-in view before this plugin's own restriction exists. */
     const knownTools = builtinToolInventory(agent.ctx)
-    const tools = defaultsForTools(knownTools)
-    if (stored !== undefined) {
-      for (const [name, on] of Object.entries(stored.tools ?? {})) {
-        if (!knownTools.has(name)) continue
-        if (on) tools.add(name)
-        else tools.delete(name)
-      }
-    }
     const entry = {
       agent, cwd,
-      mcp, tools, knownTools,
+      mcp: sessionMcp(agent.id, cwd),
+      tools: sessionTools(agent.id, cwd, knownTools),
+      knownTools,
+      knownMcp: new Set(inventory.keys()),
       skills: new Set(), knownSkills: new Set(), sources: new Map(),
       skillDescriptions: new Map(),
       disposer: undefined,
@@ -690,14 +974,7 @@ export async function apply(ctx, config) {
     const descriptions = new Map()
     const known = await skillInventory(cwd, agent, descriptions)
     entry.skillDescriptions = descriptions
-    const skills = defaultsForSkills(known)
-    if (stored !== undefined) {
-      for (const [name, on] of Object.entries(stored.skills ?? {})) {
-        if (on) skills.add(name)
-        else skills.delete(name)
-      }
-    }
-    entry.skills = skills
+    entry.skills = sessionSkills(agent.id, cwd, known)
     entry.knownSkills = new Set(known.keys())
     entry.sources = realSkillSources(known)
     reconcileSkills(entry)
@@ -725,6 +1002,17 @@ export async function apply(ctx, config) {
   const offSkillsChange = ctx.on('skills/change', () => {
     if (shadowing) return
     for (const entry of sessions.values()) void refreshSkills(entry)
+  })
+
+  /* Archiving a session is the only "this conversation is finished" signal the
+   * host offers; it is stored in the workspace registry's single root record,
+   * and every domain write is broadcast as `domain/changed`. Archiving keeps the
+   * conversation (unarchiving restores it), so the hook drops its stored choices
+   * rather than the conversation: a restored session then starts from the
+   * project's current defaults. */
+  const offDomainChanged = ctx.on('domain/changed', (change) => {
+    if (change?.domain !== 'workspace' || change.table !== '' || change.operation !== 'put') return
+    forgetArchivedSessions(change.value?.archivedSessionIds)
   })
 
   /* Remove gated servers' and disabled tools' prompt sections; keep every other
@@ -775,18 +1063,31 @@ export async function apply(ctx, config) {
     async list(sessionId) {
       scanGlobal()
       const entry = sessions.get(sessionId)
-      const cwd = entry !== undefined ? entry.cwd : ''
+      /* A session with no live agent (closed, or never attached in this host)
+       * reports the project default overlaid with its own stored overrides —
+       * exactly what reopening it would start from. */
+      const stored = entry === undefined ? sessionRecordFor(sessionId) : undefined
+      const cwd = entry !== undefined ? entry.cwd : (stored?.cwd ?? '')
       const c = cfg()
-      const mcpEnabled = entry !== undefined ? entry.mcp : mcpEnabledForStored(sessionId, cwd)
+      /* A session reports its own state; either way each entry also carries the
+       * workspace state, so the panel can show both switches. */
+      const workspaceMcpSet = workspaceMcp(cwd)
+      const mcpEnabled = entry !== undefined
+        ? entry.mcp
+        : overlay(workspaceMcp(cwd), stored?.mcp)
       const descriptions = new Map()
       const known = await skillInventory(cwd, entry?.agent, descriptions)
-      const skillsEnabled = entry !== undefined ? entry.skills : skillsEnabledForStored(cwd, known)
+      const workspaceSkillSet = workspaceSkills(cwd, known)
+      const skillsEnabled = entry !== undefined
+        ? entry.skills
+        : overlay(workspaceSkills(cwd, known), stored?.skills)
       const servers = [...inventory.keys()].sort().map((server) => {
         const names = [...inventory.get(server)]
         return {
           kind: 'mcp',
           name: server,
           enabled: mcpEnabled.has(server),
+          workspace: workspaceMcpSet.has(server),
           official: c.officialServers.includes(server),
           detail: `${names.length} tools`,
           description: serverDescriptions.get(server) ?? '',
@@ -804,43 +1105,73 @@ export async function apply(ctx, config) {
           kind: 'skill',
           name: skillName,
           enabled: skillsEnabled.has(skillName),
+          workspace: workspaceSkillSet.has(skillName),
           official: OFFICIAL_SKILL_SOURCES.has(source),
           detail: String(source),
           description: oneLine(description ?? ''),
         }
       })
       const knownTools = entry !== undefined ? entry.knownTools : builtinToolInventory(ctx)
-      const toolsEnabled = entry !== undefined ? entry.tools : toolsEnabledForStored(cwd, knownTools)
+      const workspaceToolSet = workspaceTools(cwd, knownTools)
+      const toolsEnabled = entry !== undefined
+        ? entry.tools
+        : overlay(workspaceTools(cwd, knownTools), stored?.tools, knownTools)
       const tools = [...knownTools].sort().map((toolName) => ({
         kind: 'tool',
         name: toolName,
         enabled: toolsEnabled.has(toolName),
+        workspace: workspaceToolSet.has(toolName),
         official: true,
         detail: '',
         description: oneLine(toolDescriptions.get(toolName) ?? ''),
       }))
       return { sessionId, cwd, mcp: servers, skills, tools }
     },
-    async set(sessionId, kind, target, enabled) {
+    async set(sessionId, kind, target, enabled, scope) {
+      const where = scope === 'workspace' ? 'workspace' : 'session'
       const entry = sessions.get(sessionId)
       if (entry === undefined) {
         return { ok: false, reason: 'no live agent for this session; open the session first' }
       }
+      /* A workspace choice lands in the project record (explicit choices only).
+       * This conversation's own switch outranks the project default: when it has
+       * an override for the entry, the workspace write changes the default only
+       * and leaves the session alone — the two switches may legitimately
+       * disagree, and the session one is what the model sees here. Without an
+       * override there is nothing to outrank, so the write shows up here at once
+       * (that is what "workspace, applied here" means) and later sessions in
+       * this project inherit it. Other live sessions keep their own state. */
+      let record
+      if (where === 'workspace') {
+        record = workspaceRecord(entry.cwd)
+        if (record === undefined) {
+          return { ok: false, reason: 'this session has no working directory, so it cannot own a workspace record' }
+        }
+      }
+      const pinned = where === 'workspace'
+        && sessionRecordFor(sessionId, entry.cwd)?.[SESSION_FIELDS[kind]]?.[target] !== undefined
+      const applyHere = !pinned
       if (kind === 'mcp') {
         scanGlobal()
         if (!inventory.has(target)) {
           return { ok: false, reason: `unknown MCP server "${target}"; call list first` }
         }
-        if (enabled) entry.mcp.add(target)
-        else entry.mcp.delete(target)
-        reconcile(entry)
+        if (applyHere) {
+          if (enabled) entry.mcp.add(target)
+          else entry.mcp.delete(target)
+          reconcile(entry)
+        }
+        if (record !== undefined) record.mcp[target] = enabled
       } else if (kind === 'skill') {
         if (!entry.knownSkills.has(target)) {
           return { ok: false, reason: `unknown skill "${target}"; call list first` }
         }
-        if (enabled) entry.skills.add(target)
-        else entry.skills.delete(target)
-        reconcileSkills(entry)
+        if (applyHere) {
+          if (enabled) entry.skills.add(target)
+          else entry.skills.delete(target)
+          reconcileSkills(entry)
+        }
+        if (record !== undefined) record.skills[target] = enabled
       } else if (kind === 'tool') {
         if (PROTECTED_TOOL_NAMES.has(target)) {
           return { ok: false, reason: `"${target}" is protected and cannot be gated` }
@@ -848,55 +1179,34 @@ export async function apply(ctx, config) {
         if (!entry.knownTools.has(target)) {
           return { ok: false, reason: `unknown tool "${target}"; call list first` }
         }
-        if (enabled) entry.tools.add(target)
-        else entry.tools.delete(target)
-        reconcile(entry)
+        if (applyHere) {
+          if (enabled) entry.tools.add(target)
+          else entry.tools.delete(target)
+          reconcile(entry)
+        }
+        if (record !== undefined) record.tools[target] = enabled
       } else {
         return { ok: false, reason: `unknown kind "${kind}"; use mcp, skill or tool` }
       }
-      persist(entry)
-      return { ok: true, kind, name: target, enabled, note: 'takes effect on the next model request' }
+      if (where === 'session') {
+        /* The conversation keeps this choice: reopening it, even after a host
+         * restart, starts from here instead of from the project default. */
+        persistSession(sessionId, entry.cwd, (next) => { next[SESSION_FIELDS[kind]][target] = enabled })
+      }
+      if (record !== undefined) persistWorkspace(entry.cwd)
+      return {
+        ok: true,
+        kind,
+        name: target,
+        enabled,
+        scope: where,
+        note: where === 'workspace'
+          ? pinned
+            ? 'saved as this workspace\'s default; this conversation keeps its own choice for this entry'
+            : 'applied here; sessions started in this workspace later inherit it'
+          : 'takes effect on the next model request; this conversation keeps the choice when it is reopened',
+      }
     },
-  }
-
-  /** Enabled MCP set for a session with no live agent: stored record over defaults. */
-  function mcpEnabledForStored(_sessionId, cwd) {
-    const enabled = defaultsForMcp()
-    const stored = storedFor(cwd)
-    if (stored !== undefined) {
-      for (const [server, on] of Object.entries(stored.mcp ?? {})) {
-        if (on) enabled.add(server)
-        else enabled.delete(server)
-      }
-    }
-    return enabled
-  }
-
-  /** Enabled skill set for a session with no live agent: stored record over defaults. */
-  function skillsEnabledForStored(cwd, known) {
-    const enabled = defaultsForSkills(known)
-    const stored = storedFor(cwd)
-    if (stored !== undefined) {
-      for (const [name, on] of Object.entries(stored.skills ?? {})) {
-        if (on) enabled.add(name)
-        else enabled.delete(name)
-      }
-    }
-    return enabled
-  }
-
-  /** Enabled tool set for a session with no live agent: stored record over defaults. */
-  function toolsEnabledForStored(cwd, known) {
-    const enabled = defaultsForTools(known)
-    const stored = storedFor(cwd)
-    if (stored !== undefined) {
-      for (const [name, on] of Object.entries(stored.tools ?? {})) {
-        if (!known.has(name)) continue
-        if (on) enabled.add(name)
-        else enabled.delete(name)
-      }
-    }
-    return enabled
   }
 
   /* ---------- the model-facing control surface ---------- */
@@ -904,17 +1214,18 @@ export async function apply(ctx, config) {
   const offTool = ctx.tools.register(defineTool({
     name: 'context_control',
     description:
-      'List this session\'s gated MCP servers, skills and built-in tools, or enable/disable one for this session only. '
+      'List this session\'s gated MCP servers, skills and built-in tools, or enable/disable one. '
       + 'Gated entries contribute no tool schemas, no prompt sections, and no catalog lines until enabled; changes take effect on the next model request. '
       + 'Official entries start enabled; user-configured MCP servers and skills start disabled; built-in tools start enabled. '
       + 'Protected tools (run_code, context_control, structured_output) cannot be gated. Call list first for exact names. '
-      + 'The user can also toggle entries from the composer panel.',
+      + 'scope=session (default) changes this conversation only and is kept for it when it is reopened, even after a host restart; scope=workspace records the choice as this workspace\'s default, applies it here, and is inherited by sessions started here later. '
+      + 'The user can also toggle either scope from the composer panel.',
     parameters: {
       action: {
         type: 'string',
         required: true,
         enum: ['list', 'enable', 'disable'],
-        description: 'Operation: list gated entries, or enable/disable one for this session.',
+        description: 'Operation: list gated entries, or enable/disable one.',
       },
       kind: {
         type: 'string',
@@ -924,6 +1235,11 @@ export async function apply(ctx, config) {
       target: {
         type: 'string',
         description: 'MCP server, skill or built-in tool name from the list; required for enable and disable.',
+      },
+      scope: {
+        type: 'string',
+        enum: ['session', 'workspace'],
+        description: 'Where the choice applies: session (default) = this conversation only, remembered for it when it is reopened; workspace = this workspace\'s default for sessions started here later too.',
       },
     },
     output: {
@@ -938,7 +1254,7 @@ export async function apply(ctx, config) {
       if (agent === undefined) return 'No live session context for this call.'
       if (args.action === 'list') return JSON.stringify(await ops.list(agent.id))
       if (args.target === undefined) return 'target is required for enable and disable.'
-      return JSON.stringify(await ops.set(agent.id, args.kind ?? 'mcp', args.target, args.action === 'enable'))
+      return JSON.stringify(await ops.set(agent.id, args.kind ?? 'mcp', args.target, args.action === 'enable', args.scope))
     },
   }))
 
@@ -995,6 +1311,7 @@ export async function apply(ctx, config) {
     offAgentDisposed()
     offToolsChange()
     offSkillsChange()
+    offDomainChanged()
     offAssemble()
     for (const entry of sessions.values()) {
       try { entry.disposer?.() } catch { /* agent.ctx unwind owns these too */ }

@@ -32,12 +32,38 @@ const skip = unavailable
 
 const SHADOW_SOURCE = 'context-control-gated'
 
-/** One stub Harness context wired for the plugin's injected services. */
-function harness() {
+/** One stub Harness context wired for the plugin's injected services.
+ * `domain: true` backs the two domain tables with in-memory maps so both scopes
+ * can be exercised; the default throws, like a host that mounted no storage
+ * domain (the session scope in memory must not care). `records` and
+ * `sessionRecords` may be passed in so a second harness can read what the first
+ * one persisted — that is how a restart is simulated. */
+function harness({
+  domain: withDomain = false,
+  records = new Map(),
+  sessionRecords = new Map(),
+  archived = [],
+} = {}) {
   const listeners = new Map()
   const calls = { list: [] }
   const shadowed = new Set()
   const shadows = []
+
+  const tableFor = (name) => {
+    const store = name === 'sessions' ? sessionRecords : records
+    return {
+      get: (key) => store.get(key),
+      entries: () => [...store.entries()][Symbol.iterator](),
+      put: async (key, value) => { store.set(key, value) },
+      delete: async (key) => store.delete(key),
+      deleteMany: async (keys) => {
+        let deleted = 0
+        for (const key of keys) if (store.delete(key)) deleted += 1
+        return deleted
+      },
+      get size() { return store.size },
+    }
+  }
 
   /** Global layer: what an unscoped read can see (bundled/host registrations only). */
   const globalSkills = [
@@ -57,13 +83,16 @@ function harness() {
     { name: 'run_code', description: 'PTC entry point', parameters: { type: 'object', properties: {} } },
     { name: 'mcp__demo__thing', description: 'MCP tool', parameters: { type: 'object', properties: {} } },
   ]
-  const denied = new Set()
   const restrictCalls = []
-  const filteredSchemas = () => toolSchemas.filter((schema) => !denied.has(schema.name))
 
   const ctx = {
     logger: { warn: () => {}, info: () => {} },
-    storageDomain: { open: async () => { throw new Error('no storage domain in the harness') } },
+    storageDomain: {
+      open: async () => {
+        if (!withDomain) throw new Error('no storage domain in the harness')
+        return { table: tableFor, close: async () => {} }
+      },
+    },
     tools: {
       schemas: () => toolSchemas,
       register: () => () => {},
@@ -91,7 +120,7 @@ function harness() {
     on: (event, handler) => { listeners.set(event, handler); return () => {} },
     inject: () => {},
     effect: () => {},
-    get: () => undefined,
+    get: (name) => (name === 'workspaceRegistry' ? { archivedSessionIds: archived } : undefined),
     set: () => {},
     provide: () => {},
     reflect: { provide: () => {}, get: () => undefined, set: () => {} },
@@ -104,63 +133,71 @@ function harness() {
    * not one of them, so it must be used through an injected child fiber — the
    * fiber also owns the registration and lifts it on dispose. Touching
    * `agent.ctx.skills` directly throws, exactly like a real agent context, so
-   * a regression to that shape fails this test instead of warning in the log. */
-  const agentCtx = {
-    tools: {
-      schemas: () => filteredSchemas(),
-      restrict: (filter) => {
-        restrictCalls.push(filter)
-        const added = (filter.deny ?? []).filter((name) => !denied.has(name))
-        for (const name of added) denied.add(name)
-        return () => { for (const name of added) denied.delete(name) }
-      },
-    },
-    inject: (deps, callback) => {
-      if (!deps.includes('skills')) throw new Error(`unexpected inject ${deps.join(',')}`)
-      let lifted = false
-      let unregister
-      const fiber = {
-        dispose: () => {
-          lifted = true
-          unregister?.()
-          return Promise.resolve()
+   * a regression to that shape fails this test instead of warning in the log.
+   *
+   * Every agent gets its own tool-visible view (its own restriction), because
+   * two sessions of one project must be able to disagree. */
+  function makeAgent(id, cwd = 'C:\\ws') {
+    const deniedHere = new Set()
+    const agentCtx = {
+      tools: {
+        schemas: () => toolSchemas.filter((schema) => !deniedHere.has(schema.name)),
+        restrict: (filter) => {
+          restrictCalls.push(filter)
+          const added = (filter.deny ?? []).filter((name) => !deniedHere.has(name))
+          for (const name of added) deniedHere.add(name)
+          return () => { for (const name of added) deniedHere.delete(name) }
         },
-      }
-      /* cordis runs the callback on the next tick; the test settles on demand. */
-      Promise.resolve().then(() => {
-        if (lifted) return
-        unregister = callback({ skills: ctx.skills })
-      })
-      return fiber
-    },
-  }
-  Object.defineProperty(agentCtx, 'skills', {
-    get() { throw new Error('cannot get property "skills" without inject') },
-  })
+      },
+      inject: (deps, callback) => {
+        if (!deps.includes('skills')) throw new Error(`unexpected inject ${deps.join(',')}`)
+        let lifted = false
+        let unregister
+        const fiber = {
+          dispose: () => {
+            lifted = true
+            unregister?.()
+            return Promise.resolve()
+          },
+        }
+        /* cordis runs the callback on the next tick; the test settles on demand. */
+        Promise.resolve().then(() => {
+          if (lifted) return
+          unregister = callback({ skills: ctx.skills })
+        })
+        return fiber
+      },
+    }
+    Object.defineProperty(agentCtx, 'skills', {
+      get() { throw new Error('cannot get property "skills" without inject') },
+    })
 
-  const agent = {
-    id: 'session-under-test',
-    session: { header: { cwd: 'C:\\ws' } },
-    ctx: agentCtx,
+    const agent = { id, session: { header: { cwd } }, ctx: agentCtx }
+    return agent
   }
 
-  return { ctx, agent, listeners, calls, shadows, restrictCalls, toolSchemas, tool: () => tool }
+  const agent = makeAgent('session-under-test')
+
+  return { ctx, agent, makeAgent, listeners, calls, shadows, records, sessionRecords, restrictCalls, toolSchemas, tool: () => tool }
 }
 
 /** Let the stubbed inject fibers run their callbacks. */
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+/** Config with no defaults of its own, so assertions read the mechanism, not the defaults. */
+const PLAIN_CONFIG = {
+  defaultOn: [],
+  defaultOff: [],
+  officialServers: [],
+  defaultOnSkills: [],
+  defaultOffSkills: [],
+  defaultOffTools: [],
+  allowAgentToggle: true,
+}
+
 test('skill discovery reads through the agent scope, and preset skills are gated', { skip }, async () => {
   const { ctx, agent, listeners, calls, shadows, restrictCalls, toolSchemas, tool } = harness()
-  const dispose = await apply(ctx, {
-    defaultOn: [],
-    defaultOff: [],
-    officialServers: [],
-    defaultOnSkills: [],
-    defaultOffSkills: [],
-    defaultOffTools: [],
-    allowAgentToggle: true,
-  })
+  const dispose = await apply(ctx, PLAIN_CONFIG)
 
   try {
     await listeners.get('agent/created')({ agent })
@@ -175,7 +212,9 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     const byName = new Map(listed.skills.map((entry) => [entry.name, entry]))
     assert.deepEqual([...byName.keys()].sort(), ['bundled-one', 'probe-agents', 'probe-dsh'])
     assert.equal(byName.get('bundled-one').enabled, true, 'bundled skills stay on by default')
+    assert.equal(byName.get('bundled-one').workspace, true, 'the workspace default is reported next to the session state')
     assert.equal(byName.get('probe-agents').enabled, false, 'user skills start gated off')
+    assert.equal(byName.get('probe-agents').workspace, false, 'the workspace default agrees with the fresh session')
     assert.equal(byName.get('probe-agents').detail, 'user-agents')
     assert.equal(byName.get('probe-agents').description, 'from ~/.agents/skills',
       'the catalog description reaches the panel')
@@ -288,6 +327,372 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     const glob = grown.tools.find((entry) => entry.name === 'glob')
     assert.ok(glob !== undefined, 'a late-registered tool is discovered')
     assert.equal(glob.enabled, true)
+  } finally {
+    dispose()
+  }
+})
+
+/**
+ * The two scopes: `scope=session` (the default) changes one conversation and
+ * writes nothing; `scope=workspace` writes the project record, applies to the
+ * session that made the choice, and is inherited by sessions started in the
+ * same project later — without dragging live sessions around.
+ */
+test('the workspace scope persists and a new session inherits it', { skip }, async () => {
+  const { ctx, makeAgent, listeners, records, restrictCalls, tool } = harness({ domain: true })
+  const dispose = await apply(ctx, PLAIN_CONFIG)
+
+  try {
+    const a = makeAgent('session-a')
+    await listeners.get('agent/created')({ agent: a })
+    await tick()
+
+    /* A session choice changes this conversation and nothing else. */
+    const sessionOff = JSON.parse(await tool().execute(
+      { action: 'disable', kind: 'tool', target: 'read', scope: 'session' }, { agent: a },
+    ))
+    assert.equal(sessionOff.ok, true)
+    assert.equal(sessionOff.scope, 'session')
+    assert.equal(records.size, 0, 'a session-only choice writes no workspace record')
+
+    /* A workspace choice writes the project record — explicit choices only. */
+    const workspaceOff = JSON.parse(await tool().execute(
+      { action: 'disable', kind: 'tool', target: 'bash', scope: 'workspace' }, { agent: a },
+    ))
+    assert.equal(workspaceOff.ok, true)
+    assert.equal(workspaceOff.scope, 'workspace')
+    assert.deepEqual(records.get('C:\\ws').tools, { bash: false },
+      'only the entry that was toggled is stored, not the whole session state')
+
+    await tool().execute({ action: 'enable', kind: 'skill', target: 'probe-agents', scope: 'workspace' }, { agent: a })
+    assert.deepEqual(records.get('C:\\ws').skills, { 'probe-agents': true })
+
+    /* The issuing session reflects both choices; the two scopes stay distinct. */
+    const listedA = JSON.parse(await tool().execute({ action: 'list' }, { agent: a }))
+    const aRead = listedA.tools.find((entry) => entry.name === 'read')
+    assert.equal(aRead.enabled, false, 'the session override still applies')
+    assert.equal(aRead.workspace, true, 'read is still on as a workspace default')
+    const aBash = listedA.tools.find((entry) => entry.name === 'bash')
+    assert.equal(aBash.enabled, false)
+    assert.equal(aBash.workspace, false)
+    assert.equal(listedA.skills.find((entry) => entry.name === 'probe-agents').enabled, true)
+
+    /* A new session in the same project starts as a copy of the workspace. */
+    const b = makeAgent('session-b')
+    await listeners.get('agent/created')({ agent: b })
+    await tick()
+    const listedB = JSON.parse(await tool().execute({ action: 'list' }, { agent: b }))
+    const bRead = listedB.tools.find((entry) => entry.name === 'read')
+    assert.equal(bRead.enabled, true, 'a session-only choice never reaches the next session')
+    assert.equal(bRead.workspace, true)
+    assert.equal(listedB.tools.find((entry) => entry.name === 'bash').enabled, false,
+      'a workspace-off tool starts off in the next session')
+    assert.equal(listedB.skills.find((entry) => entry.name === 'probe-agents').enabled, true,
+      'a workspace-on skill starts on in the next session')
+    assert.ok(!restrictCalls.at(-1).deny.includes('read'), 'the new session may read')
+
+    /* The first session keeps its own state: a workspace write elsewhere (and
+     * a session write in the new session) does not reach it. */
+    await tool().execute({ action: 'enable', kind: 'tool', target: 'bash', scope: 'session' }, { agent: b })
+    const listedB2 = JSON.parse(await tool().execute({ action: 'list' }, { agent: b }))
+    assert.equal(listedB2.tools.find((entry) => entry.name === 'bash').enabled, true)
+    const listedA2 = JSON.parse(await tool().execute({ action: 'list' }, { agent: a }))
+    assert.equal(listedA2.tools.find((entry) => entry.name === 'bash').enabled, false,
+      'another session\'s toggle did not reach this one')
+    assert.equal(listedA2.skills.find((entry) => entry.name === 'probe-agents').enabled, true,
+      'workspace skills apply to every session in the project')
+
+    /* A workspace disable of a skill takes effect in the issuing session and
+     * is stored as that explicit choice. */
+    await tool().execute({ action: 'disable', kind: 'skill', target: 'probe-agents', scope: 'workspace' }, { agent: b })
+    const listedB3 = JSON.parse(await tool().execute({ action: 'list' }, { agent: b }))
+    assert.equal(listedB3.skills.find((entry) => entry.name === 'probe-agents').enabled, false)
+    assert.deepEqual(records.get('C:\\ws').skills, { 'probe-agents': false })
+  } finally {
+    dispose()
+  }
+})
+
+/**
+ * Records are keyed by the project directory, never shared between projects,
+ * and a session whose working directory is unknown has nowhere to keep a
+ * project default — it must refuse the workspace scope instead of inventing a
+ * record key, while the session scope keeps working.
+ */
+test('workspace records stay per project, and a directoryless session degrades to the session scope', { skip }, async () => {
+  const { ctx, makeAgent, listeners, records, tool } = harness({ domain: true })
+  const dispose = await apply(ctx, PLAIN_CONFIG)
+
+  try {
+    const a = makeAgent('session-ws')
+    await listeners.get('agent/created')({ agent: a })
+    await tick()
+    await tool().execute({ action: 'disable', kind: 'tool', target: 'bash', scope: 'workspace' }, { agent: a })
+    assert.deepEqual([...records.keys()], ['C:\\ws'])
+
+    /* A session in a different directory starts from the configuration, not
+     * from the other project's record. */
+    const other = makeAgent('session-other', 'C:\\other')
+    await listeners.get('agent/created')({ agent: other })
+    await tick()
+    const listedOther = JSON.parse(await tool().execute({ action: 'list' }, { agent: other }))
+    assert.equal(listedOther.cwd, 'C:\\other')
+    assert.equal(listedOther.tools.find((entry) => entry.name === 'bash').enabled, true,
+      'another project keeps its own defaults')
+
+    await tool().execute({ action: 'enable', kind: 'tool', target: 'read', scope: 'workspace' }, { agent: other })
+    assert.deepEqual(records.get('C:\\other').tools, { read: true })
+    assert.deepEqual(records.get('C:\\ws').tools, { bash: false }, 'the first project record is untouched')
+
+    const loose = makeAgent('session-loose', '')
+    await listeners.get('agent/created')({ agent: loose })
+    await tick()
+    const refused = JSON.parse(await tool().execute(
+      { action: 'disable', kind: 'tool', target: 'bash', scope: 'workspace' }, { agent: loose },
+    ))
+    assert.equal(refused.ok, false)
+    assert.match(refused.reason, /no working directory/)
+    assert.equal(records.has(''), false, 'no record is invented for a session without a directory')
+
+    const kept = JSON.parse(await tool().execute(
+      { action: 'disable', kind: 'tool', target: 'bash', scope: 'session' }, { agent: loose },
+    ))
+    assert.equal(kept.ok, true, 'the session scope still works without a directory')
+    const listedLoose = JSON.parse(await tool().execute({ action: 'list' }, { agent: loose }))
+    assert.equal(listedLoose.tools.find((entry) => entry.name === 'bash').enabled, false)
+  } finally {
+    dispose()
+  }
+})
+
+/**
+ * A session override is written to the session table, not to the project
+ * record, and a second host reading the same tables starts that conversation
+ * from the override instead of from the project default.
+ */
+test('a session override is stored per conversation and survives a restart', { skip }, async () => {
+  const records = new Map()
+  const sessionRecords = new Map()
+
+  /* First host: one conversation turns a tool off for itself only. */
+  const first = harness({ domain: true, records, sessionRecords })
+  const disposeFirst = await apply(first.ctx, PLAIN_CONFIG)
+  try {
+    const a = first.makeAgent('keep-me')
+    await first.listeners.get('agent/created')({ agent: a })
+    await tick()
+    const outcome = JSON.parse(await first.tool().execute(
+      { action: 'disable', kind: 'tool', target: 'bash', scope: 'session' }, { agent: a },
+    ))
+    assert.equal(outcome.ok, true)
+    assert.match(outcome.note, /reopened/, 'the result says the choice is kept')
+
+    const stored = sessionRecords.get('keep-me')
+    assert.ok(stored !== undefined, 'the session record was written')
+    assert.equal(stored.cwd, 'C:\\ws')
+    assert.deepEqual(stored.tools, { bash: false })
+    assert.deepEqual(stored.mcp, {}, 'only the toggled entry is stored')
+    assert.equal(typeof stored.at, 'number')
+    assert.equal(records.size, 0, 'a session choice still writes no project record')
+  } finally {
+    disposeFirst()
+  }
+
+  /* Second host, same tables: the conversation comes back with its override. */
+  const second = harness({ domain: true, records, sessionRecords })
+  const disposeSecond = await apply(second.ctx, PLAIN_CONFIG)
+  try {
+    const again = second.makeAgent('keep-me')
+    await second.listeners.get('agent/created')({ agent: again })
+    await tick()
+    const listed = JSON.parse(await second.tool().execute({ action: 'list' }, { agent: again }))
+    const bash = listed.tools.find((entry) => entry.name === 'bash')
+    assert.equal(bash.enabled, false, 'the stored override came back')
+    assert.equal(bash.workspace, true, 'the workspace default is still on')
+    assert.ok(second.restrictCalls.at(-1).deny.includes('bash'), 'the restored session really hides the tool')
+
+    /* A different conversation in the same project starts from the project. */
+    const fresh = second.makeAgent('fresh')
+    await second.listeners.get('agent/created')({ agent: fresh })
+    await tick()
+    const listedFresh = JSON.parse(await second.tool().execute({ action: 'list' }, { agent: fresh }))
+    assert.equal(listedFresh.tools.find((entry) => entry.name === 'bash').enabled, true,
+      'one conversation\'s override never reaches the next one')
+  } finally {
+    disposeSecond()
+  }
+})
+
+/**
+ * The session switch outranks the workspace switch. A workspace write changes
+ * the project default and, in a conversation that has its own choice for that
+ * entry, leaves the conversation exactly as it is — the two switches are then
+ * allowed to disagree, and the session one is what the model sees. Where the
+ * conversation has no choice, there is nothing to outrank, so the new default
+ * shows up here at once.
+ */
+test('a workspace choice leaves this conversation\'s own override in place', { skip }, async () => {
+  const { ctx, makeAgent, listeners, records, sessionRecords, tool } = harness({ domain: true })
+  const dispose = await apply(ctx, PLAIN_CONFIG)
+  try {
+    const a = makeAgent('keeps-its-own')
+    await listeners.get('agent/created')({ agent: a })
+    await tick()
+
+    /* This conversation pins bash off for itself. */
+    await tool().execute({ action: 'disable', kind: 'tool', target: 'bash', scope: 'session' }, { agent: a })
+    assert.deepEqual(sessionRecords.get('keeps-its-own').tools, { bash: false })
+
+    /* The project default turns bash on; the pin stays, because it outranks it. */
+    const outcome = JSON.parse(await tool().execute(
+      { action: 'enable', kind: 'tool', target: 'bash', scope: 'workspace' }, { agent: a },
+    ))
+    assert.equal(outcome.ok, true)
+    assert.match(outcome.note, /keeps its own choice/)
+    assert.deepEqual(records.get('C:\\ws').tools, { bash: true })
+    assert.deepEqual(sessionRecords.get('keeps-its-own').tools, { bash: false },
+      'the workspace write did not take this conversation\'s override away')
+    const listedA = JSON.parse(await tool().execute({ action: 'list' }, { agent: a }))
+    const bashA = listedA.tools.find((entry) => entry.name === 'bash')
+    assert.equal(bashA.enabled, false, 'the session switch still wins here')
+    assert.equal(bashA.workspace, true, 'the workspace switch shows the new default')
+    assert.ok(!a.ctx.tools.schemas().some((schema) => schema.name === 'bash'),
+      'the model still does not see the tool')
+
+    /* A conversation with no pin follows every default change immediately. */
+    const b = makeAgent('follows')
+    await listeners.get('agent/created')({ agent: b })
+    await tick()
+    const listedB = JSON.parse(await tool().execute({ action: 'list' }, { agent: b }))
+    assert.equal(listedB.tools.find((entry) => entry.name === 'bash').enabled, true)
+    await tool().execute({ action: 'disable', kind: 'tool', target: 'bash', scope: 'workspace' }, { agent: b })
+    const listedB2 = JSON.parse(await tool().execute({ action: 'list' }, { agent: b }))
+    assert.equal(listedB2.tools.find((entry) => entry.name === 'bash').enabled, false, 'applied here at once')
+    await tool().execute({ action: 'enable', kind: 'tool', target: 'bash', scope: 'workspace' }, { agent: b })
+    assert.equal(sessionRecords.has('follows'), false, 'a workspace write never creates a session record')
+    const listedStill = JSON.parse(await tool().execute({ action: 'list' }, { agent: a }))
+    assert.equal(listedStill.tools.find((entry) => entry.name === 'bash').enabled, false,
+      'the pinned conversation was not dragged along by either project change')
+
+    /* The pin is what reopening restores — not the project default of the moment. */
+    await listeners.get('agent/disposed')({ agent: a })
+    const reopened = makeAgent('keeps-its-own')
+    await listeners.get('agent/created')({ agent: reopened })
+    await tick()
+    const listedReopened = JSON.parse(await tool().execute({ action: 'list' }, { agent: reopened }))
+    const bashReopened = listedReopened.tools.find((entry) => entry.name === 'bash')
+    assert.equal(bashReopened.enabled, false, 'the pin outranks the current default when the conversation reopens')
+    assert.equal(bashReopened.workspace, true, 'while the workspace switch still reports the new default')
+  } finally {
+    dispose()
+  }
+})
+
+/**
+ * Archive records carry no choices for us to keep: the record is dropped and the
+ * live agent falls back at once. A conversation restored from the archive is
+ * therefore indistinguishable from one that never had overrides — it inherits
+ * whatever the project says at that moment, rather than reviving retired
+ * choices.
+ */
+test('archiving a conversation drops its overrides, and a restored one inherits the project', { skip }, async () => {
+  const { ctx, makeAgent, listeners, records, sessionRecords, tool } = harness({ domain: true })
+  const dispose = await apply(ctx, PLAIN_CONFIG)
+  try {
+    const a = makeAgent('archived-one')
+    await listeners.get('agent/created')({ agent: a })
+    await tick()
+    await tool().execute({ action: 'disable', kind: 'tool', target: 'bash', scope: 'session' }, { agent: a })
+    assert.deepEqual(sessionRecords.get('archived-one').tools, { bash: false })
+    assert.ok(!a.ctx.tools.schemas().some((schema) => schema.name === 'bash'))
+
+    /* The registry stores its archive set in the workspace root record, and the
+     * host broadcasts every domain write; that write is the hook. */
+    listeners.get('domain/changed')({
+      domain: 'workspace',
+      table: '',
+      operation: 'put',
+      value: { workspaceIds: [], archivedSessionIds: ['archived-one'], pinnedSessionIds: [] },
+    })
+    assert.equal(sessionRecords.has('archived-one'), false, 'the stored choices are gone')
+    assert.ok(a.ctx.tools.schemas().some((schema) => schema.name === 'bash'),
+      'the live agent fell back to the project choice, not to the old override')
+
+    /* No project write happened: a reopened conversation must start from the
+     * project default, so the vanished override cannot come back. */
+    await listeners.get('agent/disposed')({ agent: a })
+    const restored = makeAgent('archived-one')
+    await listeners.get('agent/created')({ agent: restored })
+    await tick()
+    const listed = JSON.parse(await tool().execute({ action: 'list' }, { agent: restored }))
+    assert.equal(listed.tools.find((entry) => entry.name === 'bash').enabled, true,
+      'the restored conversation inherits the project default')
+    assert.equal(records.size, 0, 'archiving wrote nothing to the project record')
+    assert.equal(sessionRecords.has('archived-one'), false, 'no record came back for it')
+  } finally {
+    dispose()
+  }
+})
+
+/**
+ * The same cleanup must apply to archives this host never saw happen: reading
+ * the session table for the first time consults the registry, so a host restart
+ * does not resurrect choices from conversations archived while it was down.
+ */
+test('archives made before this host started are dropped when the table is read', { skip }, async () => {
+  const now = Date.now()
+  const sessionRecords = new Map([
+    ['old-archived', { cwd: 'C:\\ws', at: now, mcp: {}, skills: {}, tools: { bash: false } }],
+    ['still-live', { cwd: 'C:\\ws', at: now, mcp: {}, skills: {}, tools: { read: false } }],
+  ])
+  const { ctx, makeAgent, listeners, tool } = harness({ domain: true, sessionRecords, archived: ['old-archived'] })
+  const dispose = await apply(ctx, PLAIN_CONFIG)
+  try {
+    const a = makeAgent('still-live')
+    await listeners.get('agent/created')({ agent: a })
+    await tick()
+    assert.equal(sessionRecords.has('old-archived'), false, 'the archived record was dropped at load')
+    assert.equal(sessionRecords.has('still-live'), true, 'an unarchived record is untouched')
+
+    const listed = JSON.parse(await tool().execute({ action: 'list' }, { agent: a }))
+    assert.equal(listed.tools.find((entry) => entry.name === 'read').enabled, false,
+      'the surviving record still applies to its conversation')
+  } finally {
+    dispose()
+  }
+})
+
+/**
+ * DSH exposes no "session deleted" event, so the session table is pruned on
+ * write: records older than the TTL go, and beyond the cap the oldest go first.
+ * The record being written is never pruned.
+ */
+test('expired and excess session records are pruned when one is written', { skip }, async () => {
+  const records = new Map()
+  const sessionRecords = new Map()
+  const now = Date.now()
+  sessionRecords.set('ancient', {
+    cwd: 'C:\\ws', at: now - 400 * 24 * 60 * 60 * 1000, mcp: {}, skills: {}, tools: { bash: false },
+  })
+  for (let index = 0; index <= 1005; index += 1) {
+    sessionRecords.set(`bulk-${index}`, {
+      cwd: 'C:\\ws', at: now - 1000000 + index, mcp: {}, skills: {}, tools: {},
+    })
+  }
+
+  const { ctx, makeAgent, listeners, tool } = harness({ domain: true, records, sessionRecords })
+  const dispose = await apply(ctx, PLAIN_CONFIG)
+  try {
+    const a = makeAgent('writer')
+    await listeners.get('agent/created')({ agent: a })
+    await tick()
+    await tool().execute({ action: 'disable', kind: 'tool', target: 'read', scope: 'session' }, { agent: a })
+
+    assert.equal(sessionRecords.has('ancient'), false, 'a record older than the TTL was dropped')
+    assert.equal(sessionRecords.size, 1000, 'the table is back at its cap')
+    assert.ok(sessionRecords.has('writer'), 'the record being written survives pruning')
+    assert.equal(sessionRecords.has('bulk-0'), false, 'the oldest records went first')
+    assert.ok(sessionRecords.has('bulk-1005'), 'the newest records are kept')
   } finally {
     dispose()
   }
