@@ -534,6 +534,56 @@ export async function apply(ctx, config) {
     return line.length > max ? `${line.slice(0, max - 1)}…` : line
   }
 
+  /* `dsh-mcp-client` wraps a server's `instructions` in this heading before
+   * registering it as one prompt section, so the raw text starts with the
+   * server's own name in markdown. The panel already shows the name in the
+   * row, and the heading carried no information. */
+  const MCP_SECTION_HEADING = /^\s*###\s*MCP server:[^\n]*\n+/
+
+  /** The prose an MCP server published, without the repeated heading. */
+  function serverDescription(text) {
+    return oneLine(String(text ?? '').replace(MCP_SECTION_HEADING, ''))
+  }
+
+  /**
+   * Read `instructions` straight from the sections the MCP clients registered,
+   * instead of waiting for one of them to appear in an assembled prompt.
+   *
+   * A prompt section's text is evaluated during assembly, so a host that has
+   * not served a model request yet holds no observable instruction text — and
+   * the panel listed every server with only its tool count, on a host where the
+   * model had simply never been asked anything. The registry is available as
+   * soon as a server connects: the text provider is a getter over the last
+   * successful connection, so asking it here is cheap and side-effect free.
+   */
+  function describeRegisteredServers() {
+    let prompt
+    try {
+      prompt = ctx.get('systemPrompt')
+    } catch {
+      return
+    }
+    const layers = prompt?.layers
+    if (layers === undefined || typeof layers.merge !== 'function') return
+    let sections
+    try {
+      sections = layers.merge(undefined, (layer) => layer.sections)
+    } catch {
+      return
+    }
+    for (const [name, section] of sections) {
+      if (!name.startsWith('mcp:')) continue
+      let text
+      try {
+        text = typeof section.text === 'function' ? section.text({}) : section.text
+      } catch {
+        continue
+      }
+      const description = serverDescription(text)
+      if (description !== '') serverDescriptions.set(name.slice(4), description)
+    }
+  }
+
   /** Scan the global tool view (immune to per-agent restrictions). @returns whether the inventory changed. */
   function scanGlobal() {
     const seen = new Set()
@@ -1033,8 +1083,8 @@ export async function apply(ctx, config) {
      * collapsed copy for the panel's second line before filtering. */
     for (const section of assembly.sections) {
       if (!section.name.startsWith('mcp:')) continue
-      const text = typeof section.text === 'string' ? section.text : ''
-      if (text !== '') serverDescriptions.set(section.name.slice(4), oneLine(text))
+      const description = serverDescription(typeof section.text === 'string' ? section.text : '')
+      if (description !== '') serverDescriptions.set(section.name.slice(4), description)
     }
     const hasMcpSections = assembly.sections.some((section) => section.name.startsWith('mcp:'))
     if (hasMcpSections || disabledSections.size > 0) {
@@ -1062,6 +1112,9 @@ export async function apply(ctx, config) {
   const ops = {
     async list(sessionId) {
       scanGlobal()
+      /* Fill in instruction text even on a host that has not run a model
+       * request since it started. */
+      describeRegisteredServers()
       const entry = sessions.get(sessionId)
       /* A session with no live agent (closed, or never attached in this host)
        * reports the project default overlaid with its own stored overrides —

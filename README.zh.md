@@ -176,14 +176,14 @@ DSH 的技能是分层的：随 DSH 发布的 `bundled` 技能与宿主注册的
 
 ### 门控覆盖哪些工具
 
-面板把每个**可门控的内置工具**单独列成一行，和 MCP 服务器、技能一样可开关——每行两个圆点开关（蓝＝会话、紫＝工作区，见上）。三类条目（MCP / 技能 / 工具）用 tab 切换而不是竖向堆三组；每个 tab 自带 `开/总`，胶囊则把三类合在一起——`组件上下文 3/5`。每行还带一行说明，取资源自己的描述：工具用 schema 的 `description`，技能用目录里的 `description`，MCP 服务器用它发布的 `instructions`（从 `mcp:<server>` 提示段捕获；没发布说明的服务器只显示名称）。悬停看完整描述与来源，屏幕阅读器通过 `aria-description` 读取同一段文本。
+面板把每个**可门控的内置工具**单独列成一行，和 MCP 服务器、技能一样可开关——每行两个圆点开关（蓝＝会话、紫＝工作区，见上）。三类条目（MCP / 技能 / 工具）用 tab 切换而不是竖向堆三组；每个 tab 自带 `开/总`，胶囊则把三类合在一起——`组件上下文 3/5`。每行还带一行说明，取资源自己的描述：工具用 schema 的 `description`，技能用目录里的 `description`，MCP 服务器用它发布的 `instructions`（直接读 `mcp:<server>` 提示段注册的文本，宿主刚启动、还没发过模型请求时也能显示；没发布说明的服务器只显示工具数）。悬停看完整描述与来源，屏幕阅读器通过 `aria-description` 读取同一段文本。
 
 - 关掉的工具从模型视图里移除（和 MCP 工具共用同一次 `tools.restrict`），并在 `system-prompt/assemble` 时删掉对应的 `tool:<名字>` 引导段；只 restrict 是不够的，那段文本不属于 schema。
 - 内置工具**默认全开**，这样升级不会改变现有行为；想默认关掉某几个，用 `defaultOffTools`（见下）。
 - `run_code`、`context_control`、`structured_output` 受保护，永远不出现在列表里，也不能被关——`context_control` 本身就是把门控打开的入口，关掉它等于把自己锁在门外。
 - MCP 工具不单独列出（它们跟着服务器开关走）；`list_mcp_resources` 等资源工具同样由服务器开关控制。
 - 底部版本行从左到右依次是版本号、状态文字（「检查中…」「已是最新」）、「检查更新」按钮，全部左对齐；最右侧是一个「?」按钮，使用说明折叠在它后面，点开才占位。点击「检查更新」立刻变成「检查中…」并转圈（同步进入 busy，不等响应），宿主从缓存里毫秒级回答也不会看起来像没点到。
-- 每行的第二行永远有内容：资源自己有描述就显示描述，没有就显示条目自身的说明（MCP 服务器显示工具数、技能显示来源）。MCP 服务器只有在 `initialize` 里发布了 `instructions` 才有描述可显示——`chrome-devtools-mcp` 没有这个字段，所以它那一行显示的是工具数。
+- 每行的第二行永远有内容：资源自己有描述就显示描述，没有就显示条目自身的说明（MCP 服务器显示工具数、技能显示来源）。MCP 服务器只有在 `initialize` 里发布了 `instructions` 才有描述可显示——`chrome-devtools-mcp` 没有这个字段，所以它那一行显示的是工具数。这段文本取自 `mcp:<server>` 提示段注册的提供者，不依赖是否装配过一次系统提示；`dsh-mcp-client` 加在开头的 `### MCP server: <name>` 标题会被去掉。
 
 在 `$DSH_HOME/profiles/web/cordis.patch.yml`（默认
 `~/.dsh/profiles/web/cordis.patch.yml`）里：
@@ -232,7 +232,7 @@ mklink /J "C:\data\projects\dsh-context-control\node_modules" "C:\Users\<you>\Ap
 测试：
 
 ```pwsh
-npm run check        # 清单守卫 + node --check + 25 项升级测试 + 8 项宿主门控回归 + 46 项客户端离线回归
+npm run check        # 清单守卫 + node --check + 25 项升级测试 + 9 项宿主门控回归 + 46 项客户端离线回归
 npm test             # 只跑两套测试
 ```
 

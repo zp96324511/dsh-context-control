@@ -43,6 +43,7 @@ function harness({
   records = new Map(),
   sessionRecords = new Map(),
   archived = [],
+  promptSections = {},
 } = {}) {
   const listeners = new Map()
   const calls = { list: [] }
@@ -120,7 +121,20 @@ function harness({
     on: (event, handler) => { listeners.set(event, handler); return () => {} },
     inject: () => {},
     effect: () => {},
-    get: (name) => (name === 'workspaceRegistry' ? { archivedSessionIds: archived } : undefined),
+    get: (name) => {
+      if (name === 'workspaceRegistry') return { archivedSessionIds: archived }
+      /* The prompt service exposes its registered sections; the MCP clients
+       * keep their instruction text behind a lazy provider, as they do in the
+       * host. Nothing here is assembled, which is the point of the test. */
+      if (name === 'systemPrompt') {
+        return {
+          layers: {
+            merge: (_scope, pick) => new Map(pick({ sections: new Map(Object.entries(promptSections)) }).entries()),
+          },
+        }
+      }
+      return undefined
+    },
     set: () => {},
     provide: () => {},
     reflect: { provide: () => {}, get: () => undefined, set: () => {} },
@@ -695,5 +709,50 @@ test('expired and excess session records are pruned when one is written', { skip
     assert.ok(sessionRecords.has('bulk-1005'), 'the newest records are kept')
   } finally {
     dispose()
+  }
+})
+/**
+ * An MCP server's only prose is the `instructions` it returns from
+ * `initialize`, and it reaches the host as a prompt section whose text is a
+ * lazy provider. Reading that provider when the panel asks means a host that
+ * has not served a model request since it started still shows descriptions;
+ * waiting for an assembly left every row with nothing but its tool count.
+ */
+test('an MCP description is read from the section registry, not from an assembled prompt', { skip }, async () => {
+  const { ctx, makeAgent, listeners, tool } = harness({
+    promptSections: {
+      'mcp:demo': { text: () => '### MCP server: demo\n\nDemo server instructions.\nSecond line.' },
+      'harness:identity': { text: 'not an MCP section' },
+    },
+  })
+  const dispose = await apply(ctx, PLAIN_CONFIG)
+  try {
+    const a = makeAgent('reader')
+    await listeners.get('agent/created')({ agent: a })
+    await tick()
+
+    /* No `system-prompt/assemble` has run in this host. */
+    const listed = JSON.parse(await tool().execute({ action: 'list' }, { agent: a }))
+    const demo = listed.mcp.find((entry) => entry.name === 'demo')
+    assert.equal(demo.description, 'Demo server instructions. Second line.',
+      `description is "${demo.description}"`)
+    assert.equal(demo.description.includes('### MCP server'), false,
+      'the section heading must not reach the panel')
+  } finally {
+    dispose()
+  }
+
+  /* A server that publishes no instructions has nothing to describe: the
+   * description stays empty so the client shows the tool count instead. */
+  const quiet = harness({ promptSections: { 'mcp:demo': { text: () => '' } } })
+  const disposeQuiet = await apply(quiet.ctx, PLAIN_CONFIG)
+  try {
+    const b = quiet.makeAgent('quiet-reader')
+    await quiet.listeners.get('agent/created')({ agent: b })
+    await tick()
+    const listed = JSON.parse(await quiet.tool().execute({ action: 'list' }, { agent: b }))
+    assert.equal(listed.mcp.find((entry) => entry.name === 'demo').description, '')
+  } finally {
+    disposeQuiet()
   }
 })

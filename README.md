@@ -201,8 +201,7 @@ tabs instead of stacking three groups; each tab shows its own `on/total`, and
 the pill sums the three: `Components 3/5`. Every row also carries a one-line
 description taken from the resource itself: tools use their schema
 `description`, skills use the catalog description, and an MCP server uses its
-`instructions` prose (captured from the `mcp:<server>` system-prompt section
-during assembly; a server that publishes none keeps a single-line row). Hover
+`instructions` prose (read from the text provider registered as the `mcp:<server>` system-prompt section, so it is available before the host has assembled a single prompt; a server that publishes none shows its tool count). Hover
 for the full description plus origin, and screen readers get the same text
 through `aria-description`.
 
@@ -218,15 +217,14 @@ through `aria-description`.
 - MCP tools are not listed individually (they follow their server switch), and
   `list_mcp_resources` and friends follow the server switch too.
 - The footer row reads left to right as version, status text (`checking…`,
-  `up to date`), then the check button \u2014 all flush left \u2014 with the `?` alone at the
+  `up to date`), then the check button — all flush left — with the `?` alone at the
   far right. The usage note is collapsed behind that `?` and only takes room when
-  opened. The check button switches to a spinning \u201cchecking\u201d state immediately, so an
+  opened. The check button switches to a spinning “checking” state immediately, so an
   answer the host serves from its cache in milliseconds does not look like a click
   that did nothing.
 - A row's second line is never empty: it shows the resource's description when it
   publishes one, and the entry's own detail otherwise (tool count for an MCP server,
-  origin for a skill). An MCP server can only be described from the `instructions` it
-  returns from `initialize` \u2014 `chrome-devtools-mcp` has none, so its row shows the
+  origin for a skill). An MCP server can only be described from the `instructions` it returns from `initialize` (the `### MCP server: <name>` heading that `dsh-mcp-client` prepends is stripped) — `chrome-devtools-mcp` has none, so its row shows the
   tool count.
 
 In `$DSH_HOME/profiles/web/cordis.patch.yml` (default
@@ -273,7 +271,7 @@ mklink /J "C:\path\to\dsh-context-control\node_modules" "C:\Users\<you>\AppData\
 (Recreate it after `nvm use` switches Node.)
 
 ```pwsh
-npm run check        # manifest guard + node --check + 25 update tests + 8 host gating tests + 46 client regression tests
+npm run check        # manifest guard + node --check + 25 update tests + 9 host gating tests + 46 client regression tests
 npm test             # the two test suites only
 ```
 

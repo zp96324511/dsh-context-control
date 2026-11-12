@@ -4,6 +4,19 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.7.4 — 2026-11-13
+
+- **Descriptions no longer wait for the first model request.** A server's
+  `instructions` only existed in the plugin after a `system-prompt/assemble`
+  had run in *this* host process, so a freshly restarted host listed every MCP
+  server with nothing but its tool count until some conversation sent a
+  message. The text is now read from the section the MCP client registered
+  (`mcp:<server>`), whose provider returns the last successful handshake — so
+  the panel describes servers as soon as they connect.
+- **The `### MCP server: <name>` heading is stripped.** `dsh-mcp-client`
+  prefixes the instructions with that markdown heading before registering the
+  section, and the panel showed it verbatim in front of every description.
+- Fixed literal `\uXXXX` escapes that had reached the English README.
 ## 0.7.3 — 2026-11-12
 
 - **The update controls and the "?" swapped sides.** The version, the status
