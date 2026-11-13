@@ -256,19 +256,22 @@ function pointerdown(target) {
 
 /* ---------------- stub services ---------------- */
 
+/* `pinned: false` is the third state: nothing was chosen in this conversation,
+ * so the entry follows the project and its dot only mirrors the workspace
+ * switch. `pinned: true` means the dot is the conversation's own answer. */
 const LIST = {
   sessionId: 's1',
   cwd: 'C:\\demo',
   mcp: [
-    { kind: 'mcp', name: 'hivemem', enabled: true, workspace: true, official: false, detail: '8 tools', description: '跨会话记忆：检索、写入与归档' },
-    { kind: 'mcp', name: 'chrome-main', enabled: false, workspace: false, official: false, detail: '32 tools', description: '' },
+    { kind: 'mcp', name: 'hivemem', enabled: true, workspace: true, pinned: false, official: false, detail: '8 tools', description: '跨会话记忆：检索、写入与归档' },
+    { kind: 'mcp', name: 'chrome-main', enabled: false, workspace: false, pinned: false, official: false, detail: '32 tools', description: '' },
   ],
   skills: [
-    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, workspace: true, official: true, detail: 'bundled', description: '诊断 Windows 沙箱 ACL 拒绝' },
+    { kind: 'skill', name: 'diagnose-windows-sandbox-acl', enabled: true, workspace: true, pinned: false, official: true, detail: 'bundled', description: '诊断 Windows 沙箱 ACL 拒绝' },
   ],
   tools: [
-    { kind: 'tool', name: 'read', enabled: true, workspace: true, official: true, detail: '', description: '读取文件内容' },
-    { kind: 'tool', name: 'bash', enabled: false, workspace: false, official: true, detail: '', description: '' },
+    { kind: 'tool', name: 'read', enabled: true, workspace: true, pinned: true, official: true, detail: '', description: '读取文件内容' },
+    { kind: 'tool', name: 'bash', enabled: false, workspace: false, pinned: true, official: true, detail: '', description: '' },
   ],
 };
 
@@ -278,14 +281,15 @@ const LIST = {
 const LIST_S2 = {
   sessionId: 's2',
   cwd: 'C:\\demo2',
-  mcp: [{ kind: 'mcp', name: 'chrome-p2', enabled: false, workspace: true, official: false, detail: '5 tools' }],
-  skills: [{ kind: 'skill', name: 'office', enabled: true, workspace: true, official: false, detail: 'user' }],
+  mcp: [{ kind: 'mcp', name: 'chrome-p2', enabled: false, workspace: true, pinned: true, official: false, detail: '5 tools' }],
+  skills: [{ kind: 'skill', name: 'office', enabled: true, workspace: true, pinned: false, official: false, detail: 'user' }],
   tools: [],
 };
 
 /* A host older than 0.7.0 (files upgraded, host still running the previous
  * module) has no workspace state to report — its single switch was the
- * workspace default. The panel must keep working and mirror that state. */
+ * workspace default. The panel must keep working and mirror that state; with
+ * no `pinned` either, the dots keep their pre-0.8.0 meaning. */
 const LIST_OLD = {
   sessionId: 's3',
   cwd: 'C:\\old',
@@ -298,9 +302,10 @@ const FIXTURES = { s1: LIST, s2: LIST_S2, s3: LIST_OLD };
 
 const DICT_ZH = {
   panel: '组件上下文', none: '无', mcp: 'MCP', skill: 'Skill', tool: '工具', official: '官方', custom: '自配',
-  scopeSession: '会话', scopeWorkspace: '工作区',
+  scopeSession: '会话', scopeSessionFollowing: '会话（跟随项目）', scopeWorkspace: '工作区',
   hint: '使用说明：每个条目右侧设有两个开关，分别为会话级（蓝色圆点）与工作区级（紫色圆点）。\n'
     + '会话级仅作用于当前会话，重新打开该会话时（含宿主重启后）仍保留；会话归档后恢复，则重新继承工作区级设置。\n'
+    + '会话未对该条目单独设置时处于跟随状态：圆环保持暗色，圆心与工作区级开关一致。右键或按住 Alt 点击会话级开关可取消钉住，恢复跟随。\n'
     + '工作区级写入本项目的默认值：本会话未对该条目单独设置时立即采用，此后在本项目新建的会话继承该值。\n'
     + '两者同时存在时，会话级设置优先。所有变更在下次模型请求时生效。',
   pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具', hintToggle: '使用说明',
@@ -512,6 +517,10 @@ const fakeCtx = {
   const rowList = (view) => find(view, (element) => element.props?.['data-context-control-row'] !== undefined);
   const rowOf = (view, name) => rowList(view).find((row) => row.props['aria-label'] === name);
   const switchesIn = (row) => find(row, (element) => element.props?.['role'] === 'switch');
+  /* The ring is the border-box circle inside a switch; the dot is the filled
+   * circle inside the ring, present only when the switch is on. */
+  const ringOf = (sw) => sw.children.find((child) => child?.props?.style?.border === '1.5px solid currentColor');
+  const dotIn = (sw) => ringOf(sw)?.children?.find((child) => child?.props?.style?.background === 'currentColor');
   const textOfNode = (node) => find(node, (element) => element.text !== undefined)
     .map((element) => element.text).join('');
 
@@ -530,7 +539,8 @@ const fakeCtx = {
       /* No visible text any more: the name is in the accessible label, and the
        * colours are explained in the usage note. A hover card on a control
        * that sits two pixels from its twin would cover the row it explains. */
-      assert(pair[0].props['aria-label'].endsWith('· 会话') && pair[1].props['aria-label'].endsWith('· 工作区'),
+      assert(pair[0].props['aria-label'].startsWith(`${row.props['aria-label']} · 会话`)
+        && pair[1].props['aria-label'] === `${row.props['aria-label']} · 工作区`,
         `${row.props['aria-label']} names are ${pair.map((sw) => sw.props['aria-label'])}`);
       assert(textOfNode(pair[0]) === '' && textOfNode(pair[1]) === '',
         `${row.props['aria-label']} still prints a label: ${pair.map(textOfNode)}`);
@@ -542,15 +552,29 @@ const fakeCtx = {
     }
   });
 
-  check('a switch is a ring off and a ring with a dot on', () => {
-    const ringOf = (sw) => sw.children.find((child) => child?.props?.style?.border === '1.5px solid currentColor');
-    const dotIn = (sw) => ringOf(sw)?.children?.find((child) => child?.props?.style?.background === 'currentColor');
+  check('a following session dot stays dim and mirrors the project', () => {
+    /* hivemem has no choice here and the project says on: dim ring, dot from
+     * the workspace switch. chrome-main follows and the project says off.
+     * Brightness is the pin, so "off because I said so" and "off because the
+     * project says so" cannot look alike. */
     const on = switchesIn(rowOf(tree, 'hivemem'));
     const off = switchesIn(rowOf(tree, 'chrome-main'));
-    assert(ringOf(on[0]) !== undefined && ringOf(on[1]) !== undefined, 'a checked switch has no ring');
-    assert(dotIn(on[0]) !== undefined && dotIn(on[1]) !== undefined, 'a checked switch has no dot');
-    assert(dotIn(off[0]) === undefined && dotIn(off[1]) === undefined, 'an unchecked switch still shows a dot');
-    assert(ringOf(off[0]).props.style.opacity === '.5', `the off ring is ${ringOf(off[0]).props.style.opacity}`);
+    assert(ringOf(on[0]) !== undefined && ringOf(off[0]) !== undefined, 'a switch has no ring');
+    assert(ringOf(on[0]).props.style.opacity === '.5',
+      `a following dot is ${ringOf(on[0]).props.style.opacity}`);
+    assert(ringOf(off[0]).props.style.opacity === '.5',
+      `a following dot is ${ringOf(off[0]).props.style.opacity}`);
+    assert(dotIn(on[0]) !== undefined, 'a following dot lost the project state');
+    assert(dotIn(off[0]) === undefined, 'a following dot shows a dot the project does not have');
+    /* The workspace switch is always the deciding one, so it stays bright. */
+    assert(ringOf(on[1]).props.style.opacity === '1' && ringOf(off[1]).props.style.opacity === '1',
+      'the workspace ring is dim');
+    assert(on[0].props['data-context-control-pinned'] === 'false'
+      && off[0].props['data-context-control-pinned'] === 'false', 'a following switch claims to be pinned');
+    assert(on[1].props['data-context-control-pinned'] === undefined, 'the workspace switch claims a pin');
+    /* Brightness has no accessible equivalent, so the name says it instead. */
+    assert(on[0].props['aria-label'].endsWith('会话（跟随项目）'),
+      `a following switch is named "${on[0].props['aria-label']}"`);
     assert(ringOf(on[0]).props.style.width === '11px' && ringOf(off[0]).props.style.width === '11px',
       'the ring changes size between states');
   });
@@ -646,7 +670,10 @@ const fakeCtx = {
     /* Written prose, not shorthand: it has to state when a change lands. */
     assert(hintText.includes('会话级设置优先'), `hint reads "${hintText}"`);
     assert(hintText.includes('下次模型请求时生效'), `hint does not say when a change lands: "${hintText}"`);
-    assert(hintText.split('\n').length === 4, `hint is ${hintText.split('\n').length} lines`);
+    /* The third state and the gesture that reaches it are explained here or
+     * nowhere: the dots carry no hover card. */
+    assert(hintText.includes('跟随状态') && hintText.includes('取消钉住'), `hint does not explain unpinning: "${hintText}"`);
+    assert(hintText.split('\n').length === 5, `hint is ${hintText.split('\n').length} lines`);
     assert(opened.props.style.whiteSpace === 'pre-line', 'the note would collapse into one paragraph');
     assert(toggleIn(tree).props['aria-expanded'] === 'true', 'aria-expanded did not follow the toggle');
 
@@ -710,6 +737,36 @@ const fakeCtx = {
     assert(call[5] === 'workspace', `scope is ${call[5]}`);
   });
 
+  /* Unpin: the session switch's third state is entered with the secondary
+   * button (or Alt+click), and the host is told scope=follow. */
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  tree = mount({ type: Pill, props: { sessionId: 's1' } });
+  check('right-click unpins a session switch back to the project default', () => {
+    const before = remoteCalls.length;
+    const session = switchesIn(rowOf(tree, 'hivemem'))[0];
+    let prevented = false;
+    session.props.onContextMenu({ preventDefault() { prevented = true; } });
+    assert(prevented, 'the browser menu was not suppressed');
+    const call = remoteCalls[before];
+    assert(call !== undefined && call[0] === 'set', 'unpin did not reach the remote');
+    assert(call[1] === 's1' && call[2] === 'mcp' && call[3] === 'hivemem', JSON.stringify(call));
+    assert(call[5] === 'follow', `scope is ${call[5]}`);
+    assert(switchesIn(rowOf(tree, 'hivemem'))[1].props.onContextMenu === undefined,
+      'the workspace switch answers the unpin gesture too');
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  tree = mount({ type: Pill, props: { sessionId: 's1' } });
+  check('Alt+click unpins instead of toggling', () => {
+    const before = remoteCalls.length;
+    switchesIn(rowOf(tree, 'hivemem'))[0].props.onClick({ altKey: true });
+    const call = remoteCalls[before];
+    assert(call !== undefined && call[0] === 'set', 'Alt+click did not reach the remote');
+    assert(call[5] === 'follow', `scope is ${call[5]}`);
+    /* A plain click on the same dot still pins: toggling is unaffected. */
+    assert(switchesIn(rowOf(tree, 'hivemem'))[0].props.onClick.length === 1, 'the click handler lost its event');
+  });
+
   /* Tabs: each kind renders alone, and the strip is reachable with arrows. */
   check('a tab shows only its own kind', () => {
     const tabs = find(tree, (element) => element.props?.['role'] === 'tab');
@@ -720,6 +777,18 @@ const fakeCtx = {
     assert(rows.map((row) => row.props['aria-label']).join(',') === 'read,bash',
       `tools tab rendered ${rows.map((row) => row.props['aria-label'])}`);
     assert(switchesIn(rows[0]).length === 2, 'a tools row lost its two switches');
+  });
+
+  check('a pinned session dot is bright whether it is on or off', () => {
+    const on = switchesIn(rowOf(tree, 'read'));
+    const off = switchesIn(rowOf(tree, 'bash'));
+    assert(on[0].props['data-context-control-pinned'] === 'true', 'the pinned switch is not marked');
+    assert(on[0].props['aria-label'].endsWith('· 会话'), `a pinned switch is named "${on[0].props['aria-label']}"`);
+    assert(ringOf(on[0]).props.style.opacity === '1' && ringOf(off[0]).props.style.opacity === '1',
+      'a pinned ring is dim');
+    assert(dotIn(on[0]) !== undefined && dotIn(off[0]) === undefined, 'the dot does not follow the state');
+    assert(ringOf(on[0]).props.style.width === '11px' && ringOf(off[0]).props.style.width === '11px',
+      'the ring changes size between states');
   });
 
   check('Left/Right on the tab strip switches kinds and takes focus', () => {

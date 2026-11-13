@@ -4,6 +4,25 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.8.0 — 2026-11-13
+
+- **A third state for the session dot: following the project.** Until now a
+  session dot only said on or off, so "I turned this off here" and "the project
+  turns it off and I never touched it" looked identical. An entry this
+  conversation never set now keeps a dim ring and mirrors the workspace dot, and
+  a real choice is the only thing that lights the ring up. The list reports the
+  distinction as `pinned`, so the panel does not have to infer it.
+- **Right-click or Alt+click unpins.** `scope: 'follow'` (and `action: 'follow'`
+  on the `context_control` tool) drops this conversation's choice for that one
+  entry, applies the project's value to the live session at once, and deletes the
+  stored override — taking the whole session record with it when that was the
+  last choice it held. Other choices the conversation made are untouched.
+- An older client bundle still works: a four-argument `set` keeps meaning
+  session-only, and a host without `pinned` is read as pinned, so the dots keep
+  their pre-0.8.0 meaning.
+- The usage note gained a line on the third state and the gesture; the dots
+  still carry no hover card.
+
 ## 0.7.4 — 2026-11-13
 
 - **Descriptions no longer wait for the first model request.** A server's

@@ -49,6 +49,7 @@ window.__ModuleLoader__.load({
         name: { type: 'string' },
         enabled: { type: 'boolean' },
         workspace: { type: 'boolean' },
+        pinned: { type: 'boolean' },
         official: { type: 'boolean' },
         detail: { type: 'string' },
         description: { type: 'string' },
@@ -61,6 +62,10 @@ window.__ModuleLoader__.load({
       name: zod.string(),
       enabled: zod.boolean(),
       workspace: zod.boolean().optional(),
+      /* True when this conversation has its own choice for the entry. Absent on
+       * a pre-0.8.0 host, which knew no third state: treat it as pinned, so the
+       * dot keeps exactly the meaning it had there (enabled vs not). */
+      pinned: zod.boolean().optional(),
       official: zod.boolean(),
       detail: zod.string(),
       description: zod.string().optional(),
@@ -78,7 +83,7 @@ window.__ModuleLoader__.load({
       kind: zod.string().optional(),
       name: zod.string().optional(),
       enabled: zod.boolean().optional(),
-      scope: zod.enum(['session', 'workspace']).optional(),
+      scope: zod.enum(['session', 'workspace', 'follow']).optional(),
       note: zod.string().optional(),
     });
     const stringParam = (description) => ({
@@ -154,14 +159,14 @@ window.__ModuleLoader__.load({
             },
             {
               name: 'scope',
-              description: 'where the choice applies: session (default) or workspace.',
+              description: 'where the choice applies: session (default), workspace, or follow.',
               source: 'json',
               wire: 'scope',
               /* Optional on the wire: an older client bundle sends four
                * arguments and means session-only. */
               acceptsUndefined: true,
-              codec: { mode: 'strict', typeSymbol: 'dsh-context-control#scope', create: () => zod.enum(['session', 'workspace']), jsonSchema: { type: 'string', enum: ['session', 'workspace'] } },
-              strictCodec: { mode: 'strict', typeSymbol: 'dsh-context-control#scope', create: () => zod.enum(['session', 'workspace']), jsonSchema: { type: 'string', enum: ['session', 'workspace'] } },
+              codec: { mode: 'strict', typeSymbol: 'dsh-context-control#scope', create: () => zod.enum(['session', 'workspace', 'follow']), jsonSchema: { type: 'string', enum: ['session', 'workspace', 'follow'] } },
+              strictCodec: { mode: 'strict', typeSymbol: 'dsh-context-control#scope', create: () => zod.enum(['session', 'workspace', 'follow']), jsonSchema: { type: 'string', enum: ['session', 'workspace', 'follow'] } },
             },
           ],
           result: {
@@ -177,7 +182,7 @@ window.__ModuleLoader__.load({
                 kind: { type: 'string' },
                 name: { type: 'string' },
                 enabled: { type: 'boolean' },
-                scope: { type: 'string', enum: ['session', 'workspace'] },
+                scope: { type: 'string', enum: ['session', 'workspace', 'follow'] },
                 note: { type: 'string' },
               },
               required: ['ok'],
@@ -198,9 +203,11 @@ window.__ModuleLoader__.load({
         official: '官方',
         custom: '自配',
         scopeSession: '会话',
+        scopeSessionFollowing: '会话（跟随项目）',
         scopeWorkspace: '工作区',
         hint: '使用说明：每个条目右侧设有两个开关，分别为会话级（蓝色圆点）与工作区级（紫色圆点）。\n'
           + '会话级仅作用于当前会话，重新打开该会话时（含宿主重启后）仍保留；会话归档后恢复，则重新继承工作区级设置。\n'
+          + '会话未对该条目单独设置时处于跟随状态：圆环保持暗色，圆心与工作区级开关一致。右键或按住 Alt 点击会话级开关可取消钉住，恢复跟随。\n'
           + '工作区级写入本项目的默认值：本会话未对该条目单独设置时立即采用，此后在本项目新建的会话继承该值。\n'
           + '两者同时存在时，会话级设置优先。所有变更在下次模型请求时生效。',
         pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具',
@@ -238,9 +245,11 @@ window.__ModuleLoader__.load({
         official: 'official',
         custom: 'custom',
         scopeSession: 'session',
+        scopeSessionFollowing: 'session (following project)',
         scopeWorkspace: 'workspace',
         hint: 'Usage: each entry has two switches on its right — the session scope (blue) and the workspace scope (violet).\n'
           + 'The session scope applies to the current conversation only and is retained when that conversation is reopened, including after a host restart; a conversation restored from the archive inherits the workspace scope again.\n'
+          + 'An entry this conversation has not set is following: its ring stays dim and the dot matches the workspace switch. A right-click or an Alt+click on the session switch unpins it and restores that following state.\n'
           + 'The workspace scope writes this project\u2019s default: it is adopted at once by a conversation that has no choice of its own for that entry, and conversations opened in this project later inherit it.\n'
           + 'When both are set, the session scope takes precedence. Every change takes effect on the next model request.',
         pillHint: 'Components: click to switch MCP servers, skills and built-in tools on or off',
@@ -387,6 +396,11 @@ window.__ModuleLoader__.load({
        * distinguishable at a glance. */
       scopeSession: { color: 'var(--dsw-alias-state-business-primary, #247bbf)' },
       scopeWorkspace: { color: '#8b5cf6' },
+      /* The ring is dim unless this switch is the one deciding: the workspace
+       * switch always is, the session switch only while the conversation has a
+       * choice of its own. A following session dot therefore stays dim and
+       * mirrors the project's dot, so "off because I said so" and "off because
+       * the project says so" cannot look alike. */
       radio: {
         width: '11px', height: '11px', boxSizing: 'border-box',
         border: '1.5px solid currentColor', borderRadius: '50%',
@@ -394,7 +408,7 @@ window.__ModuleLoader__.load({
         flex: 'none', opacity: '.5',
         transition: 'opacity 90ms ease-out',
       },
-      radioOn: { opacity: '1' },
+      radioBright: { opacity: '1' },
       radioDot: {
         width: '5px', height: '5px', borderRadius: '50%',
         background: 'currentColor',
@@ -589,9 +603,10 @@ window.__ModuleLoader__.load({
 
         /**
          * Toggle one entry for one Session, then refresh that Session's state.
-         * `scope` is 'session' (this conversation only) or 'workspace' (write
-         * the project default — the host also applies it to this session, so
-         * the refetch shows both switches moved).
+         * `scope` is 'session' (this conversation only), 'workspace' (write the
+         * project default — the host also applies it to this session when that
+         * session has no choice of its own, so the refetch shows both switches
+         * moved) or 'follow' (drop this conversation's choice, `next` unused).
          */
         async function toggleState(state, sessionId, kind, name, next, scope) {
           if (state.get().busy) return;
@@ -605,6 +620,16 @@ window.__ModuleLoader__.load({
           } catch (cause) {
             state.patch({ error: String(cause?.message ?? cause), busy: false });
           }
+        }
+
+        /**
+         * Unpin one entry: drop this conversation's own choice so the entry
+         * follows the workspace default again. This is the right-click /
+         * Alt+click gesture on the session switch; the refetch then shows what
+         * the project decided.
+         */
+        async function followProject(state, sessionId, kind, name) {
+          await toggleState(state, sessionId, kind, name, true, 'follow');
         }
 
         /** Subscribe one pill to its Session's state and load it on mount. */
@@ -1222,23 +1247,37 @@ window.__ModuleLoader__.load({
               : (entry.detail ?? '');
             const entryKey = `${entry.kind}:${entry.name}`;
             /* Two switches per entry, at the end of the row: 会话 (this
-             * conversation only, never saved) and 工作区 (this workspace's
+             * conversation, remembered for it) and 工作区 (this workspace's
              * default, which new sessions inherit). Either click sets that
-             * switch to its opposite; the two are independent, so a session
-             * can be off while the workspace default is on.
+             * switch to its opposite; the two are independent, so a session can
+             * be off while the workspace default is on.
+             *
+             * A session switch this conversation never set is following the
+             * project: it stays dim and mirrors the workspace dot, and a
+             * right-click (or an Alt+click) unpins an already-set one.
              *
              * Not `disabled` while busy: a disabled focused button drops
              * keyboard focus on every toggle, so busy is enforced in the
              * click handlers and announced through aria-disabled. */
-            /* No tooltip on the dots: the colours are explained once behind the
-             * "?" at the bottom, and a hover card on a two-state control that
-             * sits two pixels from its twin only gets in the way. The
-             * accessible name still spells out which scope a dot is. */
+            /* No tooltip on the dots: the colours and the unpin gesture are
+             * explained once behind the "?" at the bottom, and a hover card on a
+             * two-state control that sits two pixels from its twin only gets in
+             * the way. The accessible name still spells out which scope a dot
+             * is. */
+            const follows = entry.pinned === false;
             const specs = [
-              { scope: 'session', label: t('scopeSession'), checked: entry.enabled === true },
+              {
+                scope: 'session',
+                /* The accessible name carries the third state: the dot's
+                 * brightness is the only visual cue, and it has none. */
+                label: follows ? t('scopeSessionFollowing') : t('scopeSession'),
+                /* Following means the project decides, so the dot mirrors it. */
+                checked: follows ? (entry.workspace ?? entry.enabled) === true : entry.enabled === true,
+                bright: !follows,
+              },
               /* A pre-0.7.0 host has no workspace state to report; its one
                * switch was the workspace default, so mirror `enabled` there. */
-              { scope: 'workspace', label: t('scopeWorkspace'), checked: (entry.workspace ?? entry.enabled) === true },
+              { scope: 'workspace', label: t('scopeWorkspace'), checked: (entry.workspace ?? entry.enabled) === true, bright: true },
             ];
             return h('div', {
               key: entryKey,
@@ -1281,20 +1320,37 @@ window.__ModuleLoader__.load({
                 'data-context-control-scope': spec.scope,
                 'data-context-control-entry': entryKey,
                 'data-context-control-state': spec.checked ? 'on' : 'off',
+                'data-context-control-pinned': spec.scope === 'session' ? (spec.bright ? 'true' : 'false') : undefined,
                 style: {
                   ...CSS.scopeSwitch,
                   ...(spec.scope === 'session' ? CSS.scopeSession : CSS.scopeWorkspace),
                 },
                 onMouseEnter: (event) => { event.currentTarget.style.background = CSS.scopeSwitchHover.background; },
                 onMouseLeave: (event) => { event.currentTarget.style.background = 'transparent'; },
-                onClick: () => {
+                /* Right-click unpins a session switch. The browser menu is
+                 * suppressed because the gesture is the control itself. */
+                onContextMenu: spec.scope === 'session'
+                  ? (event) => {
+                    event.preventDefault();
+                    if (snapshot.busy) return;
+                    void followProject(state, sessionId, entry.kind, entry.name);
+                  }
+                  : undefined,
+                onClick: (event) => {
                   if (snapshot.busy) return;
+                  /* Alt+click is the keyboard-adjacent version of the same
+                   * gesture, for a host where the secondary button is taken. */
+                  if (spec.scope === 'session' && event?.altKey) {
+                    void followProject(state, sessionId, entry.kind, entry.name);
+                    return;
+                  }
                   void toggleState(state, sessionId, entry.kind, entry.name, !spec.checked, spec.scope);
                 },
               }, h('span', {
-                /* A ring for off, the same ring with a dot for on: the shape
-                 * never changes size, so a toggle cannot shift the row. */
-                style: spec.checked ? { ...CSS.radio, ...CSS.radioOn } : CSS.radio,
+                /* A ring always; the dot says on, and the ring is bright only
+                 * for the switch that is deciding. The size never changes, so a
+                 * toggle cannot shift the row. */
+                style: spec.bright ? { ...CSS.radio, ...CSS.radioBright } : CSS.radio,
                 'aria-hidden': 'true',
               }, spec.checked ? h('span', { style: CSS.radioDot }) : null)))),
             );

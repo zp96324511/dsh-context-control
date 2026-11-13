@@ -603,6 +603,77 @@ test('a workspace choice leaves this conversation\'s own override in place', { s
 })
 
 /**
+ * The third state: an entry no conversation has set follows the project, and
+ * the list says so with `pinned: false`. `follow` drops a conversation's own
+ * choice so the entry lands back there — reporting the project's value rather
+ * than the one the click implied, and cleaning the record up when that was the
+ * last choice it held.
+ */
+test('a conversation unpins one entry and follows the project again', { skip }, async () => {
+  const { ctx, makeAgent, listeners, records, sessionRecords, tool } = harness({ domain: true })
+  const dispose = await apply(ctx, PLAIN_CONFIG)
+  try {
+    const a = makeAgent('unpins')
+    await listeners.get('agent/created')({ agent: a })
+    await tick()
+
+    /* Nothing was chosen here, so the entry follows the project (bash on). */
+    const baseline = JSON.parse(await tool().execute({ action: 'list' }, { agent: a }))
+    const start = baseline.tools.find((entry) => entry.name === 'bash')
+    assert.equal(start.pinned, false, 'a conversation with no choice reported a pin')
+    assert.equal(start.enabled, true)
+
+    /* Pin bash off for this conversation only, and read too — two choices, so
+     * dropping one must not drop the other. */
+    await tool().execute({ action: 'disable', kind: 'tool', target: 'bash', scope: 'session' }, { agent: a })
+    await tool().execute({ action: 'disable', kind: 'tool', target: 'read', scope: 'session' }, { agent: a })
+    const pinned = JSON.parse(await tool().execute({ action: 'list' }, { agent: a }))
+    assert.equal(pinned.tools.find((entry) => entry.name === 'bash').pinned, true)
+    assert.equal(pinned.tools.find((entry) => entry.name === 'bash').enabled, false)
+    assert.deepEqual(sessionRecords.get('unpins').tools, { bash: false, read: false })
+
+    /* Unpin bash: the project value comes back, and only that key is dropped. */
+    const outcome = JSON.parse(await tool().execute(
+      { action: 'follow', kind: 'tool', target: 'bash' }, { agent: a },
+    ))
+    assert.equal(outcome.ok, true)
+    assert.equal(outcome.scope, 'follow')
+    assert.equal(outcome.enabled, true, 'the result reports the project value, not the click')
+    assert.deepEqual(sessionRecords.get('unpins').tools, { read: false },
+      'unpinning bash must not drop the other choice')
+    assert.ok(a.ctx.tools.schemas().some((schema) => schema.name === 'bash'),
+      'the unpinned tool is not visible to the model')
+    assert.ok(!a.ctx.tools.schemas().some((schema) => schema.name === 'read'),
+      'the pinned tool came back with the unpin')
+
+    const after = JSON.parse(await tool().execute({ action: 'list' }, { agent: a }))
+    const bashAfter = after.tools.find((entry) => entry.name === 'bash')
+    assert.equal(bashAfter.pinned, false, 'the entry is following again')
+    assert.equal(bashAfter.enabled, true)
+    assert.equal(after.tools.find((entry) => entry.name === 'read').pinned, true)
+
+    /* The gesture is idempotent, and unpinning the last choice drops the whole
+     * record instead of leaving an empty one behind. */
+    await tool().execute({ action: 'follow', kind: 'tool', target: 'bash' }, { agent: a })
+    assert.deepEqual(sessionRecords.get('unpins').tools, { read: false }, 'a no-op follow rewrote the record')
+    await tool().execute({ action: 'follow', kind: 'tool', target: 'read' }, { agent: a })
+    assert.equal(sessionRecords.has('unpins'), false, 'the empty record was left behind')
+    assert.equal(records.size, 0, 'unpinning wrote a project record')
+
+    /* A reopened conversation with no record starts from the project again. */
+    await listeners.get('agent/disposed')({ agent: a })
+    const reopened = makeAgent('unpins')
+    await listeners.get('agent/created')({ agent: reopened })
+    await tick()
+    const listedAgain = JSON.parse(await tool().execute({ action: 'list' }, { agent: reopened }))
+    assert.equal(listedAgain.tools.find((entry) => entry.name === 'read').enabled, true)
+    assert.equal(listedAgain.tools.find((entry) => entry.name === 'read').pinned, false)
+  } finally {
+    dispose()
+  }
+})
+
+/**
  * Archive records carry no choices for us to keep: the record is dropped and the
  * live agent falls back at once. A conversation restored from the archive is
  * therefore indistinguishable from one that never had overrides — it inherits

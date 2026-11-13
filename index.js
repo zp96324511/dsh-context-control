@@ -56,7 +56,9 @@
  * - session — what this conversation's model surface is. It starts as a copy of
  *   the workspace choice, changes independently afterwards, and its overrides
  *   are stored per conversation id, so reopening the conversation (after a host
- *   restart too) starts from where the user left it.
+ *   restart too) starts from where the user left it. An entry with no override
+ *   here follows the workspace choice, and "follow" drops the override so it
+ *   does again.
  * - workspace — the project default stored in the domain record, which every
  *   new session in that project inherits. A workspace toggle writes the record
  *   and applies the same value to the session that issued it only when that
@@ -240,14 +242,15 @@ class ContextControlRemote extends TypertRemoteService {
   }
   /**
    * Remote `set`: enable or disable one MCP server, skill or tool for one
-   * session, or write that choice as the project's workspace default.
+   * session, write that choice as the project's workspace default, or drop the
+   * session's own choice so the entry follows the project again.
    * `scope` is optional on the wire so an older client bundle keeps working;
    * it means session-only.
    */
   async remoteSet(sessionId, kind, target, enabled, scope) {
     return this.ops.set(
       String(sessionId), String(kind), String(target), Boolean(enabled),
-      scope === 'workspace' ? 'workspace' : 'session',
+      scope === 'workspace' ? 'workspace' : scope === 'follow' ? 'follow' : 'session',
     )
   }
 }
@@ -468,6 +471,49 @@ export async function apply(ctx, config) {
     } catch (error) {
       warn(ctx, `dropping session state failed: ${String(error)}`)
     }
+  }
+
+  /**
+   * Drop one entry's override so that entry follows the project default again —
+   * the session switch's "unpin" gesture (right-click or Alt+click in the
+   * panel). The conversation keeps every other choice it made; when this was
+   * the last one, the whole record goes, because an empty record would otherwise
+   * claim overrides it does not have.
+   * @returns whether an override was there to drop.
+   */
+  function forgetSessionChoice(sessionId, cwd, field, target) {
+    loadSessionRecords()
+    const record = sessionRecords.get(sessionId)
+    if (record === undefined || record.cwd !== cwd) return false
+    const choices = record[field]
+    if (choices === undefined || choices[target] === undefined) return false
+    delete choices[target]
+    const empty = Object.keys(record.mcp).length === 0
+      && Object.keys(record.skills).length === 0
+      && Object.keys(record.tools).length === 0
+    if (empty) {
+      sessionRecords.delete(sessionId)
+      if (domain !== null) {
+        try {
+          domain.table('sessions').delete(sessionId)
+            .catch((error) => warn(ctx, `dropping session state failed: ${String(error)}`))
+        } catch (error) {
+          warn(ctx, `dropping session state failed: ${String(error)}`)
+        }
+      }
+      return true
+    }
+    record.at = Date.now()
+    sessionRecords.set(sessionId, record)
+    if (domain === null) return true
+    domain.table('sessions').put(sessionId, {
+      cwd: record.cwd,
+      at: record.at,
+      mcp: { ...record.mcp },
+      skills: { ...record.skills },
+      tools: { ...record.tools },
+    }).catch((error) => warn(ctx, `persisting session state failed: ${String(error)}`))
+    return true
   }
 
   /**
@@ -1122,6 +1168,10 @@ export async function apply(ctx, config) {
       const stored = entry === undefined ? sessionRecordFor(sessionId) : undefined
       const cwd = entry !== undefined ? entry.cwd : (stored?.cwd ?? '')
       const c = cfg()
+      /* This conversation's own overrides, independent of what the switches
+       * currently show: an entry listed without one follows the project
+       * default, and the panel paints that as the dim third state. */
+      const overrides = entry !== undefined ? sessionRecordFor(sessionId, entry.cwd) : stored
       /* A session reports its own state; either way each entry also carries the
        * workspace state, so the panel can show both switches. */
       const workspaceMcpSet = workspaceMcp(cwd)
@@ -1141,6 +1191,7 @@ export async function apply(ctx, config) {
           name: server,
           enabled: mcpEnabled.has(server),
           workspace: workspaceMcpSet.has(server),
+          pinned: overrides?.mcp?.[server] !== undefined,
           official: c.officialServers.includes(server),
           detail: `${names.length} tools`,
           description: serverDescriptions.get(server) ?? '',
@@ -1159,6 +1210,7 @@ export async function apply(ctx, config) {
           name: skillName,
           enabled: skillsEnabled.has(skillName),
           workspace: workspaceSkillSet.has(skillName),
+          pinned: overrides?.skills?.[skillName] !== undefined,
           official: OFFICIAL_SKILL_SOURCES.has(source),
           detail: String(source),
           description: oneLine(description ?? ''),
@@ -1174,6 +1226,7 @@ export async function apply(ctx, config) {
         name: toolName,
         enabled: toolsEnabled.has(toolName),
         workspace: workspaceToolSet.has(toolName),
+        pinned: overrides?.tools?.[toolName] !== undefined,
         official: true,
         detail: '',
         description: oneLine(toolDescriptions.get(toolName) ?? ''),
@@ -1181,19 +1234,28 @@ export async function apply(ctx, config) {
       return { sessionId, cwd, mcp: servers, skills, tools }
     },
     async set(sessionId, kind, target, enabled, scope) {
-      const where = scope === 'workspace' ? 'workspace' : 'session'
+      const where = scope === 'workspace' ? 'workspace' : scope === 'follow' ? 'follow' : 'session'
       const entry = sessions.get(sessionId)
       if (entry === undefined) {
         return { ok: false, reason: 'no live agent for this session; open the session first' }
       }
-      /* A workspace choice lands in the project record (explicit choices only).
-       * This conversation's own switch outranks the project default: when it has
-       * an override for the entry, the workspace write changes the default only
-       * and leaves the session alone — the two switches may legitimately
-       * disagree, and the session one is what the model sees here. Without an
-       * override there is nothing to outrank, so the write shows up here at once
-       * (that is what "workspace, applied here" means) and later sessions in
-       * this project inherit it. Other live sessions keep their own state. */
+      const field = SESSION_FIELDS[kind]
+      if (field === undefined) {
+        return { ok: false, reason: `unknown kind "${kind}"; use mcp, skill or tool` }
+      }
+      /* Where the write lands:
+       * - session: this conversation's own override, kept across restarts.
+       * - workspace: the project record (explicit choices only). This
+       *   conversation's own switch outranks the project default: when it has an
+       *   override for the entry, the workspace write changes the default only
+       *   and leaves the session alone — the two switches may legitimately
+       *   disagree, and the session one is what the model sees here. Without an
+       *   override there is nothing to outrank, so the write shows up here at
+       *   once (that is what "workspace, applied here" means) and later sessions
+       *   in this project inherit it. Other live sessions keep their own state.
+       * - follow: drop this conversation's override for the entry, which puts it
+       *   back on the project default — the panel's unpin gesture. The state
+       *   that results is the project's, not the one the click implied. */
       let record
       if (where === 'workspace') {
         record = workspaceRecord(entry.cwd)
@@ -1202,62 +1264,72 @@ export async function apply(ctx, config) {
         }
       }
       const pinned = where === 'workspace'
-        && sessionRecordFor(sessionId, entry.cwd)?.[SESSION_FIELDS[kind]]?.[target] !== undefined
-      const applyHere = !pinned
+        && sessionRecordFor(sessionId, entry.cwd)?.[field]?.[target] !== undefined
+      const applyHere = where === 'follow' || !pinned
+      let nextEnabled = enabled
       if (kind === 'mcp') {
         scanGlobal()
         if (!inventory.has(target)) {
           return { ok: false, reason: `unknown MCP server "${target}"; call list first` }
         }
+        nextEnabled = where === 'follow' ? workspaceMcp(entry.cwd).has(target) : enabled
         if (applyHere) {
-          if (enabled) entry.mcp.add(target)
+          if (nextEnabled) entry.mcp.add(target)
           else entry.mcp.delete(target)
           reconcile(entry)
         }
-        if (record !== undefined) record.mcp[target] = enabled
+        if (record !== undefined) record.mcp[target] = nextEnabled
       } else if (kind === 'skill') {
         if (!entry.knownSkills.has(target)) {
           return { ok: false, reason: `unknown skill "${target}"; call list first` }
         }
+        nextEnabled = where === 'follow'
+          ? workspaceSkills(entry.cwd, entry.knownSkills).has(target)
+          : enabled
         if (applyHere) {
-          if (enabled) entry.skills.add(target)
+          if (nextEnabled) entry.skills.add(target)
           else entry.skills.delete(target)
           reconcileSkills(entry)
         }
-        if (record !== undefined) record.skills[target] = enabled
-      } else if (kind === 'tool') {
+        if (record !== undefined) record.skills[target] = nextEnabled
+      } else {
         if (PROTECTED_TOOL_NAMES.has(target)) {
           return { ok: false, reason: `"${target}" is protected and cannot be gated` }
         }
         if (!entry.knownTools.has(target)) {
           return { ok: false, reason: `unknown tool "${target}"; call list first` }
         }
+        nextEnabled = where === 'follow'
+          ? workspaceTools(entry.cwd, entry.knownTools).has(target)
+          : enabled
         if (applyHere) {
-          if (enabled) entry.tools.add(target)
+          if (nextEnabled) entry.tools.add(target)
           else entry.tools.delete(target)
           reconcile(entry)
         }
-        if (record !== undefined) record.tools[target] = enabled
-      } else {
-        return { ok: false, reason: `unknown kind "${kind}"; use mcp, skill or tool` }
+        if (record !== undefined) record.tools[target] = nextEnabled
       }
       if (where === 'session') {
         /* The conversation keeps this choice: reopening it, even after a host
          * restart, starts from here instead of from the project default. */
-        persistSession(sessionId, entry.cwd, (next) => { next[SESSION_FIELDS[kind]][target] = enabled })
+        persistSession(sessionId, entry.cwd, (next) => { next[field][target] = nextEnabled })
+      } else if (where === 'follow') {
+        forgetSessionChoice(sessionId, entry.cwd, field, target)
       }
       if (record !== undefined) persistWorkspace(entry.cwd)
       return {
         ok: true,
         kind,
         name: target,
-        enabled,
+        enabled: nextEnabled,
         scope: where,
         note: where === 'workspace'
           ? pinned
             ? 'saved as this workspace\'s default; this conversation keeps its own choice for this entry'
             : 'applied here; sessions started in this workspace later inherit it'
-          : 'takes effect on the next model request; this conversation keeps the choice when it is reopened',
+          : where === 'follow'
+            ? 'this conversation follows the workspace default for this entry again'
+            : 'takes effect on the next model request; this conversation keeps the choice when it is reopened',
       }
     },
   }
@@ -1271,14 +1343,14 @@ export async function apply(ctx, config) {
       + 'Gated entries contribute no tool schemas, no prompt sections, and no catalog lines until enabled; changes take effect on the next model request. '
       + 'Official entries start enabled; user-configured MCP servers and skills start disabled; built-in tools start enabled. '
       + 'Protected tools (run_code, context_control, structured_output) cannot be gated. Call list first for exact names. '
-      + 'scope=session (default) changes this conversation only and is kept for it when it is reopened, even after a host restart; scope=workspace records the choice as this workspace\'s default, applies it here, and is inherited by sessions started here later. '
-      + 'The user can also toggle either scope from the composer panel.',
+      + 'scope=session (default) changes this conversation only and is kept for it when it is reopened, even after a host restart; scope=workspace records the choice as this workspace\'s default, applies it here, and is inherited by sessions started here later; scope=follow drops this conversation\'s own choice so the entry follows the workspace default again. '
+      + 'The user can also toggle either scope from the composer panel, and unpins a conversation with a right-click or Alt+click on its session dot.',
     parameters: {
       action: {
         type: 'string',
         required: true,
-        enum: ['list', 'enable', 'disable'],
-        description: 'Operation: list gated entries, or enable/disable one.',
+        enum: ['list', 'enable', 'disable', 'follow'],
+        description: 'Operation: list gated entries, enable/disable one, or make one follow the workspace default again (action=follow).',
       },
       kind: {
         type: 'string',
@@ -1291,8 +1363,8 @@ export async function apply(ctx, config) {
       },
       scope: {
         type: 'string',
-        enum: ['session', 'workspace'],
-        description: 'Where the choice applies: session (default) = this conversation only, remembered for it when it is reopened; workspace = this workspace\'s default for sessions started here later too.',
+        enum: ['session', 'workspace', 'follow'],
+        description: 'Where the choice applies: session (default) = this conversation only, remembered for it when it is reopened; workspace = this workspace\'s default for sessions started here later too; follow = drop this conversation\'s own choice, so the entry follows the workspace default again.',
       },
     },
     output: {
@@ -1306,7 +1378,8 @@ export async function apply(ctx, config) {
       const agent = exec.agent
       if (agent === undefined) return 'No live session context for this call.'
       if (args.action === 'list') return JSON.stringify(await ops.list(agent.id))
-      if (args.target === undefined) return 'target is required for enable and disable.'
+      if (args.target === undefined) return 'target is required for enable, disable and follow.'
+      if (args.action === 'follow') return JSON.stringify(await ops.set(agent.id, args.kind ?? 'mcp', args.target, true, 'follow'))
       return JSON.stringify(await ops.set(agent.id, args.kind ?? 'mcp', args.target, args.action === 'enable', args.scope))
     },
   }))

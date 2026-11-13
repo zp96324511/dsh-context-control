@@ -134,6 +134,7 @@ takes the same choice as a `scope` argument:
 |---|---|---|
 | `session` (default) | the `sessions` table of the `context_control` domain, keyed by session id (with the `cwd` it was made in) | this session alone; reopening that conversation — even after a host restart — brings the choice back (an archived one starts from the workspace again) |
 | `workspace` | an explicit choice in the project record (the `projects` table of the same domain, keyed by `cwd`) | this session immediately, and every session started in that directory afterwards |
+| `follow` (`action=follow` on the tool) | removes that entry from the `sessions` record | the entry follows the workspace default again; in the panel this is a right-click or Alt+click on the session dot |
 
 - A workspace's effective state is the configuration defaults (`defaultOn`,
   `defaultOff`, `officialServers`, `defaultOnSkills`, `defaultOffTools`, …)
@@ -152,6 +153,12 @@ takes the same choice as a `scope` argument:
   immediately only when this conversation has no choice for that entry. The
   `session` switch shows what this conversation actually runs with, the
   `workspace` switch shows the project default.
+- A dot has three looks: **bright blue ring + centre dot** = this conversation
+  turned the entry on itself, **bright blue ring, hollow** = it turned it off
+  itself, **dim blue ring** = nothing was chosen here and the entry follows the
+  project (its centre then matches the violet workspace dot). A right-click or an
+  Alt+click on the blue dot unpins it back to following; a plain click pins it
+  again with the opposite state.
 - The workspace record is keyed by the project directory; a session record is
   keyed by session id and remembers the `cwd` it was made in, so a conversation
   that moves to another directory does not carry its old overrides along. A
