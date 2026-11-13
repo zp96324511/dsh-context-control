@@ -392,7 +392,7 @@ window.__ModuleLoader__.load({
         background: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.18))',
       },
       /* Blue is the session's own choice, violet the project default; the ring
-       * keeps its hue when off and only loses saturation, so the pair stays
+       * keeps its hue in every state and only changes opacity, so the pair stays
        * distinguishable at a glance. */
       scopeSession: { color: 'var(--dsw-alias-state-business-primary, #247bbf)' },
       scopeWorkspace: { color: '#8b5cf6' },
@@ -400,12 +400,18 @@ window.__ModuleLoader__.load({
        * switch always is, the session switch only while the conversation has a
        * choice of its own. A following session dot therefore stays dim and
        * mirrors the project's dot, so "off because I said so" and "off because
-       * the project says so" cannot look alike. */
+       * the project says so" cannot look alike.
+       *
+       * The dim step is a single `opacity` on the ring: it multiplies the border
+       * colour and the dot alike, which is why one number moves both and why it
+       * works on a light and a dark theme without a second palette. 0.3 leaves
+       * the ring legible (it is 1.5px of saturated colour on any background) while
+       * reading unmistakably as "not decided" next to a bright one. */
       radio: {
         width: '11px', height: '11px', boxSizing: 'border-box',
         border: '1.5px solid currentColor', borderRadius: '50%',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        flex: 'none', opacity: '.5',
+        flex: 'none', opacity: '.3',
         transition: 'opacity 90ms ease-out',
       },
       radioBright: { opacity: '1' },

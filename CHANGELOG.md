@@ -4,6 +4,15 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.8.1 — 2026-11-13
+
+- **The following state is dimmer, so the two states separate at a glance.**
+  The dim/bright step is a single `opacity` on the ring (it multiplies the
+  border colour and the centre dot together, which is why one number moves both
+  and why it needs no second palette for a dark theme); it went from 0.5 to 0.3,
+  leaving a bright ring at 1.0. The ring keeps its 11px size in every state, so
+  nothing shifts.
+
 ## 0.8.0 — 2026-11-13
 
 - **A third state for the session dot: following the project.** Until now a

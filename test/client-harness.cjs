@@ -560,15 +560,18 @@ const fakeCtx = {
     const on = switchesIn(rowOf(tree, 'hivemem'));
     const off = switchesIn(rowOf(tree, 'chrome-main'));
     assert(ringOf(on[0]) !== undefined && ringOf(off[0]) !== undefined, 'a switch has no ring');
-    assert(ringOf(on[0]).props.style.opacity === '.5',
+    assert(ringOf(on[0]).props.style.opacity === '.3',
       `a following dot is ${ringOf(on[0]).props.style.opacity}`);
-    assert(ringOf(off[0]).props.style.opacity === '.5',
+    assert(ringOf(off[0]).props.style.opacity === '.3',
       `a following dot is ${ringOf(off[0]).props.style.opacity}`);
     assert(dotIn(on[0]) !== undefined, 'a following dot lost the project state');
     assert(dotIn(off[0]) === undefined, 'a following dot shows a dot the project does not have');
-    /* The workspace switch is always the deciding one, so it stays bright. */
+    /* The workspace switch is always the deciding one, so it stays bright — and
+     * the gap to the dim state has to be wide enough to read at a glance. */
     assert(ringOf(on[1]).props.style.opacity === '1' && ringOf(off[1]).props.style.opacity === '1',
       'the workspace ring is dim');
+    assert(Number(ringOf(on[1]).props.style.opacity) - Number(ringOf(on[0]).props.style.opacity) >= 0.6,
+      'a following ring is too close to a bright one to tell apart');
     assert(on[0].props['data-context-control-pinned'] === 'false'
       && off[0].props['data-context-control-pinned'] === 'false', 'a following switch claims to be pinned');
     assert(on[1].props['data-context-control-pinned'] === undefined, 'the workspace switch claims a pin');
