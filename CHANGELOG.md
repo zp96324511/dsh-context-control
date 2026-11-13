@@ -4,6 +4,30 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.8.2 — 2026-11-13
+
+- **The popover follows the light theme.** It did not before: three of its
+  colours asked for CSS variables DSH never defined
+  (`--dsw-alias-bg-elevated`, `--dsw-alias-bg-sunken`, `--dsw-alias-border-l`),
+  so every one of them fell through to the hard-coded fallback — and the panel
+  background fell back to `#232326`, near-black in both palettes. In the dark
+  theme that matched by accident; in the light theme the panel stayed black
+  under a white GUI. The surface now uses the theme's own menu material
+  (`--dsw-specific-menu`, light `#fcfdfe` / dark `#303136`, both translucent
+  over `--dsw-menu-backdrop-filter`), the borders use `--dsw-alias-border-l2`,
+  and the popped shadow is `--dsw-elevation-prominent` instead of a fixed
+  `rgba(0,0,0,.38)` pair that read as a smudge on a white page. The install
+  log block borrows `--dsw-alias-markdown-code-block`. If even the tokens are
+  missing (an older DSH), the fallback is now `Canvas`, which follows
+  `color-scheme` rather than assuming dark.
+- **The kind switcher uses the theme's segmented pair.** The track is
+  `--dsw-alias-interactive-bg-hover` and the selected tab
+  `--dsw-alias-interactive-bg-active`, so the thumb has a real step up from
+  the track in both palettes.
+- **A following dot is dimmer by one notch less:** the ring opacity went from
+  0.3 to 0.4, which keeps "following the project" visible on the light theme's
+  white card while staying clearly dimmer than a bright 1.0 ring.
+
 ## 0.8.1 — 2026-11-13
 
 - **The following state is dimmer, so the two states separate at a glance.**

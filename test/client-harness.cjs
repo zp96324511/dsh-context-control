@@ -6,6 +6,7 @@
  * restart. */
 
 const path = require('node:path');
+const fs = require('node:fs');
 
 /* A relative path is resolved against the caller's cwd (the package root under
  * `npm run test`), not against this file — `require()` would otherwise look for
@@ -560,9 +561,9 @@ const fakeCtx = {
     const on = switchesIn(rowOf(tree, 'hivemem'));
     const off = switchesIn(rowOf(tree, 'chrome-main'));
     assert(ringOf(on[0]) !== undefined && ringOf(off[0]) !== undefined, 'a switch has no ring');
-    assert(ringOf(on[0]).props.style.opacity === '.3',
+    assert(ringOf(on[0]).props.style.opacity === '.4',
       `a following dot is ${ringOf(on[0]).props.style.opacity}`);
-    assert(ringOf(off[0]).props.style.opacity === '.3',
+    assert(ringOf(off[0]).props.style.opacity === '.4',
       `a following dot is ${ringOf(off[0]).props.style.opacity}`);
     assert(dotIn(on[0]) !== undefined, 'a following dot lost the project state');
     assert(dotIn(off[0]) === undefined, 'a following dot shows a dot the project does not have');
@@ -570,7 +571,7 @@ const fakeCtx = {
      * the gap to the dim state has to be wide enough to read at a glance. */
     assert(ringOf(on[1]).props.style.opacity === '1' && ringOf(off[1]).props.style.opacity === '1',
       'the workspace ring is dim');
-    assert(Number(ringOf(on[1]).props.style.opacity) - Number(ringOf(on[0]).props.style.opacity) >= 0.6,
+    assert(Number(ringOf(on[1]).props.style.opacity) - Number(ringOf(on[0]).props.style.opacity) >= 0.55,
       'a following ring is too close to a bright one to tell apart');
     assert(on[0].props['data-context-control-pinned'] === 'false'
       && off[0].props['data-context-control-pinned'] === 'false', 'a following switch claims to be pinned');
@@ -642,6 +643,27 @@ const fakeCtx = {
     assert(menu.style.maxHeight === 320, `maxHeight is ${menu.style.maxHeight}`);
     assert(menu.style.width === 320, `width is ${menu.style.width} (two switches need room)`);
     assert(typeof menu.style.left === 'number' && typeof menu.style.bottom === 'number', 'missing coordinates');
+  });
+
+  check('the popover surface comes from the theme, not a dark constant', () => {
+    /* DSH defines `--dsw-alias-bg-layer-1..4`, `--dsw-alias-border-l1..l4` and
+     * the menu material; it never defined `--dsw-alias-bg-elevated`,
+     * `--dsw-alias-bg-sunken` or `--dsw-alias-border-l`. Those fell straight
+     * through to their fallbacks, which is why the popover stayed near-black
+     * after the GUI switched to the light theme. The harness has no stylesheet,
+     * so the source is the only place this can be caught offline. The comments
+     * name the dead tokens on purpose; only real `var()` references count. */
+    const source = fs.readFileSync(CLIENT, 'utf8');
+    assert(!/var\(--dsw-alias-(?:bg-elevated|bg-sunken)/.test(source),
+      'client.js still asks the theme for a token DSH does not define');
+    assert(!/var\(--dsw-alias-border-l\b/.test(source),
+      'client.js still asks for --dsw-alias-border-l (only l1..l4 exist)');
+    assert(menu.style.background.includes('--dsw-specific-menu'),
+      `the popover surface is ${menu.style.background}`);
+    assert(menu.style.boxShadow.includes('--dsw-elevation-prominent'),
+      `the popover shadow is ${menu.style.boxShadow}`);
+    assert(menu.style.backdropFilter.includes('--dsw-menu-backdrop-filter'),
+      `the popover backdrop is ${menu.style.backdropFilter}`);
   });
 
   check('the usage hint is collapsed behind a "?" button', () => {

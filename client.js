@@ -284,7 +284,10 @@ window.__ModuleLoader__.load({
       pill: {
         display: 'inline-flex', alignItems: 'center', gap: '4px',
         alignSelf: 'center', whiteSpace: 'nowrap',
-        border: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.35))`,
+        /* `--dsw-alias-border-l` never existed in DSH, so every border fell
+         * through to the neutral fallback; `l2` is the theme's hairline and
+         * moves with the light/dark palette. */
+        border: `1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))`,
         borderRadius: '999px', padding: '0 9px',
         fontSize: '12px', lineHeight: '20px',
         color: 'var(--dsw-alias-label-secondary, inherit)',
@@ -302,10 +305,22 @@ window.__ModuleLoader__.load({
         boxSizing: 'border-box',
         padding: '6px',
         display: 'flex', flexDirection: 'column', gap: '1px',
-        background: 'var(--dsw-alias-bg-elevated, #232326)',
-        border: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.35))`,
+        /* The surface is the theme's menu material, not a hard-coded fill.
+         * `--dsw-alias-bg-elevated` never existed in DSH, so the old fallback
+         * (#232326) painted the popover near-black in the light theme — the
+         * panel simply ignored the palette. `--dsw-specific-menu` is what DSH's
+         * own dropdowns use (light #fcfdfe, dark #303136, both translucent over
+         * a backdrop blur), and `Canvas` follows `color-scheme` if even that is
+         * missing. */
+        background: 'var(--dsw-specific-menu, var(--dsw-menu-surface-fill, Canvas))',
+        backdropFilter: 'var(--dsw-menu-backdrop-filter, none)',
+        border: `1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))`,
         borderRadius: '10px',
-        boxShadow: '0 10px 28px rgba(0,0,0,.38), 0 2px 8px rgba(0,0,0,.28)',
+        /* A popover shadow has to survive both palettes: the old fixed
+         * rgba(0,0,0,.38/.28) pair read as a black smudge on a white page.
+         * `--dsw-elevation-prominent` already carries the hairline stroke plus
+         * a shadow tuned per theme. */
+        boxShadow: 'var(--dsw-elevation-prominent, 0 3px 8px rgba(0,0,0,.10), 0 0 20px rgba(0,0,0,.06))',
       },
       /* One tab per kind instead of three stacked groups: with every kind
        * populated the list no longer fits above the composer, and the counts
@@ -313,7 +328,11 @@ window.__ModuleLoader__.load({
       tabBar: {
         display: 'flex', gap: '2px', flex: 'none',
         padding: '2px', marginBottom: '2px',
-        background: 'rgba(128,128,128,.10)',
+        /* The kind switcher reuses the theme's segmented-control pair (a
+         * `interactive-bg-hover` track with an `interactive-bg-active` thumb),
+         * so the selected tab keeps a visible step up in both palettes instead
+         * of relying on one neutral grey. */
+        background: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.10))',
         borderRadius: '8px',
       },
       tab: {
@@ -324,7 +343,7 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.6))',
       },
       tabOn: {
-        background: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.18))',
+        background: 'var(--dsw-alias-interactive-bg-active, var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.18)))',
         color: 'var(--dsw-alias-label-primary, inherit)',
       },
       tabLabel: {
@@ -404,14 +423,14 @@ window.__ModuleLoader__.load({
        *
        * The dim step is a single `opacity` on the ring: it multiplies the border
        * colour and the dot alike, which is why one number moves both and why it
-       * works on a light and a dark theme without a second palette. 0.3 leaves
-       * the ring legible (it is 1.5px of saturated colour on any background) while
-       * reading unmistakably as "not decided" next to a bright one. */
+       * works on a light and a dark theme without a second palette. 0.4 leaves
+       * the ring legible (it is 1.5px of saturated colour on any background)
+       * while reading unmistakably as "not decided" next to a bright one. */
       radio: {
         width: '11px', height: '11px', boxSizing: 'border-box',
         border: '1.5px solid currentColor', borderRadius: '50%',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        flex: 'none', opacity: '.3',
+        flex: 'none', opacity: '.4',
         transition: 'opacity 90ms ease-out',
       },
       radioBright: { opacity: '1' },
@@ -435,7 +454,7 @@ window.__ModuleLoader__.load({
         flex: 'none', width: '16px', height: '16px', padding: '0',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         boxSizing: 'border-box',
-        border: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.35))`,
+        border: `1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))`,
         borderRadius: '50%', background: 'transparent', cursor: 'pointer',
         fontSize: '10px', lineHeight: '1', fontFamily: 'inherit',
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.75))',
@@ -463,7 +482,7 @@ window.__ModuleLoader__.load({
       footer: {
         display: 'flex', flexDirection: 'column', gap: '2px',
         marginTop: '2px', paddingTop: '4px',
-        borderTop: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.25))`,
+        borderTop: `1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.25))`,
       },
       footerRow: {
         display: 'flex', alignItems: 'center', gap: '8px',
@@ -491,7 +510,7 @@ window.__ModuleLoader__.load({
       footerButton: {
         flex: 'none',
         display: 'inline-flex', alignItems: 'center', gap: '5px',
-        border: `1px solid var(--dsw-alias-border-l, rgba(128,128,128,.35))`,
+        border: `1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))`,
         borderRadius: '6px', padding: '0 6px',
         fontSize: '11px', lineHeight: '18px',
         background: 'transparent', cursor: 'pointer',
@@ -507,7 +526,9 @@ window.__ModuleLoader__.load({
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: '10px', lineHeight: '14px',
         whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-        background: 'var(--dsw-alias-bg-sunken, rgba(128,128,128,.12))',
+        /* `--dsw-alias-bg-sunken` never existed either; the code-block surface
+         * is the theme's own recessed fill and is defined in both palettes. */
+        background: 'var(--dsw-alias-markdown-code-block, rgba(128,128,128,.12))',
         color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.8))',
       },
     };
