@@ -145,6 +145,14 @@ takes the same choice as a `scope` argument:
   session record if that conversation was adjusted before. Sessions that are
   already open are never dragged around by somebody else's `workspace` write —
   that separation is the point of the two switches.
+- A **branch** (fork) starts from the session-scoped choices the source
+  conversation had pinned: those entries are copied onto the child before the
+  branch opens, so its first request already runs with the same switches. It is
+  a snapshot — changing either side afterwards leaves the other alone; the
+  workspace default needs no copy, since a branch keeps its source's `cwd`.
+  DSH's ordinary fork records no source session, so the copy happens in the
+  client, between `ctx.sessions.fork` returning the child id and the UI opening
+  the branch.
 - A `workspace` write stores **the entry that was toggled**, not the whole
   session state: turning `read` off does not silently pin `bash`'s default too.
 - The two switches may legitimately disagree: **the session switch outranks the

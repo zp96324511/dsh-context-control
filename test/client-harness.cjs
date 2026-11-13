@@ -396,9 +396,13 @@ const textOf = (node) => {
 };
 
 const remoteCalls = [];
+let remoteListFailure = false;
+let forkChildId = 'child-1';
+const forkCalls = [];
 const remoteContextControl = {
   async list(sessionId) {
     remoteCalls.push(['list', sessionId]);
+    if (remoteListFailure) throw new Error('gateway down');
     return { ok: true, value: FIXTURES[sessionId] ?? LIST };
   },
   async set(sessionId, kind, target, enabled, scope) {
@@ -446,6 +450,13 @@ const fakeCtx = {
       getSnapshot: () => ({ byId: { s1: { id: 's1', retainedBy: { mainView: 1 } } } }),
       subscribe: () => () => {},
     },
+    /* The branch API: resolves with the child Session id, the way the real
+     * ClientSessions.fork does (and after calling its onCreated hook). */
+    async fork(request) {
+      forkCalls.push(request);
+      if (typeof request?.onCreated === 'function') request.onCreated(forkChildId);
+      return forkChildId;
+    },
   },
 };
 
@@ -457,6 +468,56 @@ const fakeCtx = {
   });
 
   await plugin.apply(fakeCtx);
+
+  /* ---- branch inheritance ----
+   * The client half wraps ctx.sessions.fork: a branch starts with the source
+   * conversation's own (pinned) choices, and nothing about that copy is ever
+   * allowed to fail the fork itself. */
+  check('sessions.fork is wrapped', () => {
+    assert(typeof fakeCtx.sessions.fork === 'function', 'fork vanished');
+    assert(fakeCtx.sessions.fork[Symbol.for('dsh-context-control.fork-wrapped')] === true, 'fork is not wrapped');
+  });
+
+  const forkStart = remoteCalls.length;
+  const began = await fakeCtx.sessions.fork({ sessionId: 's1', atSeq: 12, increaseTitle: true });
+
+  check('the branch resolves with the child Session and a bare request', () => {
+    assert(began === 'child-1', `fork resolved with ${String(began)}`);
+    assert(forkCalls[0]?.sessionId === 's1' && forkCalls[0]?.atSeq === 12,
+      `the request did not reach the real fork unchanged: ${JSON.stringify(forkCalls[0])}`);
+  });
+
+  check('the branch starts with the pinned choices of its source only', () => {
+    const calls = remoteCalls.slice(forkStart);
+    assert(calls[0]?.[0] === 'list' && calls[0][1] === 's1', `the source was not read first: ${JSON.stringify(calls)}`);
+    const sets = calls.filter((call) => call[0] === 'set').map((call) => call.slice(1));
+    assert(JSON.stringify(sets) === JSON.stringify([
+      ['child-1', 'tool', 'read', true, 'session'],
+      ['child-1', 'tool', 'bash', false, 'session'],
+    ]), `copied ${JSON.stringify(sets)}`);
+  });
+
+  /* A dead gateway costs the copy, never the branch. */
+  remoteListFailure = true;
+  const warnings = [];
+  const warnBefore = console.warn;
+  console.warn = (...args) => { warnings.push(args); };
+  let survived;
+  try { survived = await fakeCtx.sessions.fork({ sessionId: 's1', atSeq: 4 }); }
+  finally { console.warn = warnBefore; remoteListFailure = false; }
+
+  check('a failed copy warns and still opens the branch', () => {
+    assert(survived === 'child-1', `fork rejected with ${String(survived)}`);
+    assert(warnings.length === 1, `warnings recorded: ${warnings.length}`);
+  });
+
+  /* A page reload applies this module again against the same service object. */
+  const wrappedFork = fakeCtx.sessions.fork;
+  await plugin.apply(fakeCtx);
+
+  check('applying again does not stack a second wrapper', () => {
+    assert(fakeCtx.sessions.fork === wrappedFork, 'fork was wrapped twice');
+  });
 
   /* A page reload starts the module over: a fresh update store with no
    * remembered version, and the once-per-page auto check runs again. The

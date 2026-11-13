@@ -4,6 +4,24 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.9.0 — 2026-11-13
+
+- **A branch inherits the conversation it was cut from.** DSH's ordinary fork
+  copies the transcript and records `cwd`/preset only — no parent id — so the
+  host cannot tell a branch where it came from, and a conversation that had
+  switched three MCP servers off came back with all of them on. The client half
+  now wraps `ctx.sessions.fork`: once it resolves with the child id, the
+  source's **pinned** entries are written onto the child (one `set` per entry,
+  `scope: 'session'`) before the UI opens it, so the branch's first request
+  already sees the same surface. Only pinned entries travel — everything else
+  keeps following the workspace default, which the child shares through the
+  same `cwd`. The copy is a snapshot, not a link.
+- **A branch never fails because the copy failed.** A dead gateway, or a single
+  entry the host refuses, is logged and the branch opens from the workspace
+  default. A second `apply` against the same service object (a page reload)
+  does not stack another wrapper, and the disposer restores `fork` only while
+  it is still the one this instance installed.
+
 ## 0.8.2 — 2026-11-13
 
 - **The popover follows the light theme.** It did not before: three of its

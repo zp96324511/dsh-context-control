@@ -673,6 +673,73 @@ window.__ModuleLoader__.load({
           return { state, snapshot };
         }
 
+        /* ---- Branch inheritance ----
+         * An ordinary fork records no source relationship: the host copies the
+         * transcript into a new Session and stores cwd/preset only, so nothing
+         * on the host side knows which conversation a branch came from. This
+         * half does know both ids — `ctx.sessions.fork` receives the source id
+         * and resolves with the child id — so wrapping it is the one place that
+         * can carry the source's own gating choices across without touching the
+         * host. Only pinned entries travel: everything else follows the
+         * workspace default, and the child shares the parent's cwd. The copy
+         * finishes before fork() resolves, and both UIs open a branch only
+         * after that promise settles, so its first request already sees the
+         * inherited state — a snapshot, not a link: changing the branch later
+         * never touches the source.
+         *
+         * A page applies this module again on reload, and the `sessions`
+         * service outlives the fiber: the wrapper is marked so that a second
+         * apply neither stacks another copy nor captures one that is being
+         * disposed. A failed copy degrades to "the branch starts from the
+         * workspace default" — it must never fail the fork itself. */
+        const FORK_WRAPPED = Symbol.for('dsh-context-control.fork-wrapped');
+        /* list field -> the kind `set` expects. */
+        const FORK_KINDS = [['mcp', 'mcp'], ['skills', 'skill'], ['tools', 'tool']];
+
+        /** Copy one Session's pinned choices onto another, entry by entry. */
+        async function inheritSessionGating(sourceId, childId) {
+          if (typeof sourceId !== 'string' || typeof childId !== 'string' || sourceId === childId) return;
+          const listed = await remoteContextControl.list(sourceId);
+          if (!listed.ok) throw new Error(listed.error?.message ?? 'contextControl/list failed');
+          const data = listed.value ?? {};
+          for (const [field, kind] of FORK_KINDS) {
+            for (const entry of data[field] ?? []) {
+              if (entry?.pinned !== true) continue;
+              try {
+                const outcome = await remoteContextControl.set(childId, kind, entry.name, entry.enabled === true, 'session');
+                if (!outcome.ok) throw new Error(outcome.error?.message ?? 'contextControl/set failed');
+                if (outcome.value?.ok !== true) throw new Error(outcome.value?.reason ?? 'contextControl/set refused');
+              } catch (cause) {
+                /* One entry (a stale name, a race with attach) must not stop
+                 * the rest: report it and keep copying. */
+                console.warn(`[dsh-context-control] could not carry ${kind} "${entry.name}" into the branch:`, cause);
+              }
+            }
+          }
+        }
+
+        let restoreFork = () => {};
+        try {
+          const sessions = ctx.sessions;
+          if (sessions !== undefined && typeof sessions.fork === 'function' && sessions.fork[FORK_WRAPPED] !== true) {
+            const originalFork = sessions.fork;
+            const forkWithInheritance = async function forkWithInheritance(request) {
+              const childId = await originalFork.call(this, request);
+              /* Past this point the branch exists: an inheritance failure is
+               * reported, never rethrown. */
+              try { await inheritSessionGating(request?.sessionId, childId); }
+              catch (cause) { console.warn('[dsh-context-control] could not carry gating into the branch:', cause); }
+              return childId;
+            };
+            forkWithInheritance[FORK_WRAPPED] = true;
+            sessions.fork = forkWithInheritance;
+            restoreFork = () => { if (sessions.fork === forkWithInheritance) sessions.fork = originalFork; };
+          }
+        } catch {
+          /* A `sessions` shape without a writable fork simply does not get
+           * branch inheritance; the pill keeps working. */
+        }
+
         /* ---- update channel ----
          * One row in the popover about this plugin itself: which version is
          * installed, whether the channel it was installed from has a newer
@@ -1479,8 +1546,12 @@ window.__ModuleLoader__.load({
           }, ContextPill);
         });
 
-        /* Unmount the descriptor contribution with the plugin. */
-        return async () => { await unmount; };
+        /* Unmount the descriptor contribution with the plugin, and hand fork
+         * back only if it is still the wrapper this instance installed. */
+        return async () => {
+          restoreFork();
+          await unmount;
+        };
       },
     };
   },
