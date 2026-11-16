@@ -306,7 +306,7 @@ const DICT_ZH = {
   scopeSession: '会话', scopeSessionFollowing: '会话（跟随项目）', scopeWorkspace: '工作区',
   hint: '使用说明：每个条目右侧设有两个开关，分别为会话级（蓝色圆点）与工作区级（紫色圆点）。\n'
     + '会话级仅作用于当前会话，重新打开该会话时（含宿主重启后）仍保留；会话归档后恢复，则重新继承工作区级设置。\n'
-    + '会话未对该条目单独设置时处于跟随状态：圆环保持暗色，圆心与工作区级开关一致。右键或按住 Alt 点击会话级开关可取消钉住，恢复跟随。\n'
+    + '会话未对该条目单独设置时处于跟随状态：圆环保持暗色，圆心与工作区级开关一致。右键、按住 Alt 点击，或用手指长按会话级开关，可取消钉住，恢复跟随。\n'
     + '工作区级写入本项目的默认值：本会话未对该条目单独设置时立即采用，此后在本项目新建的会话继承该值。\n'
     + '两者同时存在时，会话级设置优先。所有变更在下次模型请求时生效。',
   pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具', hintToggle: '使用说明',
@@ -759,6 +759,10 @@ const fakeCtx = {
     /* The third state and the gesture that reaches it are explained here or
      * nowhere: the dots carry no hover card. */
     assert(hintText.includes('跟随状态') && hintText.includes('取消钉住'), `hint does not explain unpinning: "${hintText}"`);
+    /* All three ways to reach the third state are named: a desktop gesture is
+     * useless on a phone unless the hold is spelled out too. */
+    assert(hintText.includes('右键') && hintText.includes('Alt') && hintText.includes('长按'),
+      `hint does not name the unpin gestures: "${hintText}"`);
     assert(hintText.split('\n').length === 5, `hint is ${hintText.split('\n').length} lines`);
     assert(opened.props.style.whiteSpace === 'pre-line', 'the note would collapse into one paragraph');
     assert(toggleIn(tree).props['aria-expanded'] === 'true', 'aria-expanded did not follow the toggle');
@@ -851,6 +855,81 @@ const fakeCtx = {
     assert(call[5] === 'follow', `scope is ${call[5]}`);
     /* A plain click on the same dot still pins: toggling is unaffected. */
     assert(switchesIn(rowOf(tree, 'hivemem'))[0].props.onClick.length === 1, 'the click handler lost its event');
+  });
+
+  /* Touch: a phone has neither a secondary button nor Alt, so holding the dot
+   * is the same gesture there. The pointer type decides, not the duration
+   * alone — a mouse held on the primary button has to stay a click. */
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  tree = mount({ type: Pill, props: { sessionId: 's1' } });
+  const beforeMouseHold = remoteCalls.length;
+  switchesIn(rowOf(tree, 'hivemem'))[0].props.onPointerDown({ pointerType: 'mouse', clientX: 4, clientY: 4 });
+  await new Promise((resolve) => setTimeout(resolve, 560));
+  check('a held mouse press does not unpin', () => {
+    assert(remoteCalls.length === beforeMouseHold,
+      `a mouse hold reached the host: ${JSON.stringify(remoteCalls.slice(beforeMouseHold))}`);
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  tree = mount({ type: Pill, props: { sessionId: 's1' } });
+  const beforeHold = remoteCalls.length;
+  switchesIn(rowOf(tree, 'hivemem'))[0].props.onPointerDown({ pointerType: 'touch', clientX: 4, clientY: 4 });
+  await new Promise((resolve) => setTimeout(resolve, 560));
+  check('a long press on a session dot unpins it back to following', () => {
+    const call = remoteCalls[beforeHold];
+    assert(call !== undefined && call[0] === 'set', 'the hold did not reach the host');
+    assert(call[1] === 's1' && call[2] === 'mcp' && call[3] === 'hivemem', JSON.stringify(call));
+    assert(call[5] === 'follow', `scope is ${call[5]}`);
+    /* Only the session switch has a third state to return to. */
+    assert(switchesIn(rowOf(tree, 'hivemem'))[1].props.onPointerDown === undefined,
+      'the workspace switch armed a hold');
+  });
+
+  check('the click a hold ends with does not toggle the switch again', () => {
+    const before = remoteCalls.length;
+    switchesIn(rowOf(tree, 'hivemem'))[0].props.onClick({ preventDefault() {} });
+    assert(remoteCalls.length === before,
+      `the release toggled after the hold: ${JSON.stringify(remoteCalls.slice(before))}`);
+  });
+
+  /* A finger that travels is scrolling the list behind the popover, not
+   * holding the dot it happens to start on. */
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  tree = mount({ type: Pill, props: { sessionId: 's1' } });
+  const beforeScroll = remoteCalls.length;
+  const scrolled = switchesIn(rowOf(tree, 'chrome-main'))[0];
+  scrolled.props.onPointerDown({ pointerType: 'touch', clientX: 10, clientY: 10 });
+  scrolled.props.onPointerMove({ pointerType: 'touch', clientX: 12, clientY: 48 });
+  await new Promise((resolve) => setTimeout(resolve, 560));
+  check('a finger that scrolls past the dot does not unpin it', () => {
+    assert(remoteCalls.length === beforeScroll,
+      `a scroll unpinned: ${JSON.stringify(remoteCalls.slice(beforeScroll))}`);
+  });
+
+  /* A half second of no visible change reads as a dead control. */
+  check('the dot tints while the finger is down and clears on release', () => {
+    const surface = { style: {} };
+    const pressed = switchesIn(rowOf(tree, 'chrome-main'))[0];
+    pressed.props.onPointerDown({ pointerType: 'touch', clientX: 3, clientY: 3, currentTarget: surface });
+    assert(typeof surface.style.background === 'string' && surface.style.background !== 'transparent',
+      'the dot showed no feedback while held');
+    pressed.props.onPointerUp({ pointerType: 'touch', clientX: 3, clientY: 3, currentTarget: surface });
+    assert(surface.style.background === 'transparent', 'the tint outlived the press');
+  });
+
+  /* And a tap is still a tap: short, on a touch screen, it toggles. */
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  tree = mount({ type: Pill, props: { sessionId: 's1' } });
+  const beforeTap = remoteCalls.length;
+  const tapped = switchesIn(rowOf(tree, 'chrome-main'))[0];
+  tapped.props.onPointerDown({ pointerType: 'touch', clientX: 3, clientY: 3 });
+  tapped.props.onPointerUp({ pointerType: 'touch', clientX: 3, clientY: 3 });
+  tapped.props.onClick({});
+  check('a short tap on a touch screen still toggles the switch', () => {
+    const call = remoteCalls[beforeTap];
+    assert(call !== undefined && call[0] === 'set', 'a tap did not reach the host');
+    assert(call[2] === 'mcp' && call[3] === 'chrome-main' && call[4] === true, JSON.stringify(call));
+    assert(call[5] === 'session', `scope is ${call[5]}`);
   });
 
   /* Tabs: each kind renders alone, and the strip is reachable with arrows. */

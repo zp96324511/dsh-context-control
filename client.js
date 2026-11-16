@@ -207,7 +207,7 @@ window.__ModuleLoader__.load({
         scopeWorkspace: '工作区',
         hint: '使用说明：每个条目右侧设有两个开关，分别为会话级（蓝色圆点）与工作区级（紫色圆点）。\n'
           + '会话级仅作用于当前会话，重新打开该会话时（含宿主重启后）仍保留；会话归档后恢复，则重新继承工作区级设置。\n'
-          + '会话未对该条目单独设置时处于跟随状态：圆环保持暗色，圆心与工作区级开关一致。右键或按住 Alt 点击会话级开关可取消钉住，恢复跟随。\n'
+          + '会话未对该条目单独设置时处于跟随状态：圆环保持暗色，圆心与工作区级开关一致。右键、按住 Alt 点击，或用手指长按会话级开关，可取消钉住，恢复跟随。\n'
           + '工作区级写入本项目的默认值：本会话未对该条目单独设置时立即采用，此后在本项目新建的会话继承该值。\n'
           + '两者同时存在时，会话级设置优先。所有变更在下次模型请求时生效。',
         pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具',
@@ -249,7 +249,7 @@ window.__ModuleLoader__.load({
         scopeWorkspace: 'workspace',
         hint: 'Usage: each entry has two switches on its right — the session scope (blue) and the workspace scope (violet).\n'
           + 'The session scope applies to the current conversation only and is retained when that conversation is reopened, including after a host restart; a conversation restored from the archive inherits the workspace scope again.\n'
-          + 'An entry this conversation has not set is following: its ring stays dim and the dot matches the workspace switch. A right-click or an Alt+click on the session switch unpins it and restores that following state.\n'
+          + 'An entry this conversation has not set is following: its ring stays dim and the dot matches the workspace switch. A right-click, an Alt+click, or a long press on the session switch unpins it and restores that following state.\n'
           + 'The workspace scope writes this project\u2019s default: it is adopted at once by a conversation that has no choice of its own for that entry, and conversations opened in this project later inherit it.\n'
           + 'When both are set, the session scope takes precedence. Every change takes effect on the next model request.',
         pillHint: 'Components: click to switch MCP servers, skills and built-in tools on or off',
@@ -406,6 +406,12 @@ window.__ModuleLoader__.load({
         border: 'none', borderRadius: '50%', background: 'transparent',
         cursor: 'pointer', fontFamily: 'inherit',
         transition: 'background 90ms ease-out',
+        /* A hold on the dot is the unpin gesture, so it must not also start a
+         * text selection or iOS' selection callout. `touch-action:
+         * manipulation` keeps panning and pinch-zoom for the list behind it and
+         * drops only the double-tap zoom delay on the dot itself. */
+        userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none',
+        touchAction: 'manipulation',
       },
       scopeSwitchHover: {
         background: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.18))',
@@ -548,6 +554,29 @@ window.__ModuleLoader__.load({
         if (holder !== null && holder !== undefined && typeof holder.appendChild === 'function') holder.appendChild(style);
       } catch {
         /* Without the rule the busy label still changes; only the rotation is lost. */
+      }
+    }
+
+    /* ---- The hold that unpins ----
+     * A session switch has a third state — following the project — which a
+     * desktop reaches with the secondary button or Alt+click. A touch screen
+     * has neither, so holding the dot is the same gesture there.
+     *
+     * 500ms is the platform's own long-press figure (Android's
+     * getLongPressTimeout(), iOS' ~0.5s): shorter and a slow tap meant as a
+     * toggle becomes an unpin; longer and the control reads as dead. */
+    const LONG_PRESS_MS = 500;
+    /* Travel beyond this cancels the hold. The rows scroll, and a finger that
+     * is really scrolling past the dot must not unpin on its way through. */
+    const LONG_PRESS_SLOP_PX = 10;
+
+    /** A short haptic tick where the platform has one. Never throws. */
+    function hapticTick() {
+      try {
+        if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+        navigator.vibrate(12);
+      } catch {
+        /* A blocked vibrate must not break the gesture that asked for it. */
       }
     }
 
@@ -1210,6 +1239,13 @@ window.__ModuleLoader__.load({
            * three lines of a panel that is already tight. A "?" button keeps it
            * one click away without spending the space. */
           const [showHint, setShowHint] = useState(false);
+          /* Long-press bookkeeping, one record per session switch: the timer
+           * that turns a hold into an unpin, where the finger went down, and
+           * whether that hold already acted. A ref rather than state because
+           * none of it is rendered — and because the menu re-renders when the
+           * hold it fired sets `busy`, which would otherwise orphan the timer
+           * of a press still in flight. */
+          const presses = useRef(new Map());
 
           useEffect(() => {
             const measure = () => {
@@ -1326,6 +1362,65 @@ window.__ModuleLoader__.load({
           if (pos === undefined || active === undefined) return null;
           let rowIndex = 0;
           rowRefs.current = [];
+          /* ---- The hold on a session switch ----
+           * One record per switch: the timer that turns a hold into an unpin,
+           * where the finger went down, and whether that hold already acted.
+           * These five functions are what the record means; the handlers on
+           * the button below are the gesture itself. */
+          const pressFor = (key) => {
+            let press = presses.current.get(key);
+            if (press === undefined) {
+              press = { timer: null, x: 0, y: 0, fired: false };
+              presses.current.set(key, press);
+            }
+            return press;
+          };
+          const cancelPress = (key) => {
+            const press = presses.current.get(key);
+            if (press === undefined || press.timer === null) return;
+            clearTimeout(press.timer);
+            press.timer = null;
+          };
+          /** Arm a hold. Only a finger or a pen does: a mouse held on the
+           *  primary button has to stay an ordinary toggle. */
+          const armPress = (key, event, fire) => {
+            cancelPress(key);
+            const press = pressFor(key);
+            /* Every press starts from "has not acted", so a hold that was
+             * cancelled or a click that never came cannot swallow the next. */
+            press.fired = false;
+            if (event?.pointerType !== 'touch' && event?.pointerType !== 'pen') return;
+            if (snapshot.busy) return;
+            press.x = event.clientX ?? 0;
+            press.y = event.clientY ?? 0;
+            press.timer = setTimeout(() => {
+              press.timer = null;
+              press.fired = true;
+              hapticTick();
+              fire();
+            }, LONG_PRESS_MS);
+          };
+          /** A finger past the slop is scrolling, not holding. */
+          const pressDrifted = (key, event) => {
+            const press = presses.current.get(key);
+            if (press === undefined || press.timer === null) return false;
+            return Math.abs((event?.clientX ?? 0) - press.x) > LONG_PRESS_SLOP_PX
+              || Math.abs((event?.clientY ?? 0) - press.y) > LONG_PRESS_SLOP_PX;
+          };
+          /** True once for a hold that already acted; clears the flag. */
+          const pressFired = (key) => {
+            const press = presses.current.get(key);
+            if (press === undefined || !press.fired) return false;
+            press.fired = false;
+            return true;
+          };
+          /** Press feedback: a half-second hold with no visible change reads as
+           *  a dead control, and a touch screen has no hover to lean on. */
+          const tintPress = (event, on) => {
+            const style = event?.currentTarget?.style;
+            if (style === undefined || style === null) return;
+            style.background = on ? CSS.scopeSwitchHover.background : 'transparent';
+          };
           const row = (entry) => {
             const index = rowIndex;
             rowIndex += 1;
@@ -1348,7 +1443,8 @@ window.__ModuleLoader__.load({
              *
              * A session switch this conversation never set is following the
              * project: it stays dim and mirrors the workspace dot, and a
-             * right-click (or an Alt+click) unpins an already-set one.
+             * right-click, an Alt+click or a long press unpins an already-set
+             * one.
              *
              * Not `disabled` while busy: a disabled focused button drops
              * keyboard focus on every toggle, so busy is enforced in the
@@ -1399,54 +1495,108 @@ window.__ModuleLoader__.load({
                 ),
                 secondLine === '' ? null : h('span', { style: CSS.menuDesc }, secondLine),
               ),
-              h('span', { style: CSS.switches }, specs.map((spec, column) => h('button', {
-                key: spec.scope,
-                ref: (element) => {
-                  const slot = rowRefs.current[index];
-                  if (slot !== undefined) slot.switches[column] = element ?? null;
-                },
-                type: 'button',
-                role: 'switch',
-                'aria-checked': spec.checked ? 'true' : 'false',
-                'aria-disabled': snapshot.busy ? 'true' : 'false',
-                'aria-label': `${entry.name} · ${spec.label}`,
-                'data-context-control': 'scope',
-                'data-context-control-scope': spec.scope,
-                'data-context-control-entry': entryKey,
-                'data-context-control-state': spec.checked ? 'on' : 'off',
-                'data-context-control-pinned': spec.scope === 'session' ? (spec.bright ? 'true' : 'false') : undefined,
-                style: {
-                  ...CSS.scopeSwitch,
-                  ...(spec.scope === 'session' ? CSS.scopeSession : CSS.scopeWorkspace),
-                },
-                onMouseEnter: (event) => { event.currentTarget.style.background = CSS.scopeSwitchHover.background; },
-                onMouseLeave: (event) => { event.currentTarget.style.background = 'transparent'; },
-                /* Right-click unpins a session switch. The browser menu is
-                 * suppressed because the gesture is the control itself. */
-                onContextMenu: spec.scope === 'session'
-                  ? (event) => {
-                    event.preventDefault();
+              h('span', { style: CSS.switches }, specs.map((spec, column) => {
+                /* Handlers and hold agree on this key: the press state of one
+                 * switch never reaches its twin. */
+                const pressKey = `${entryKey}:${spec.scope}`;
+                const fire = () => followProject(state, sessionId, entry.kind, entry.name);
+                return h('button', {
+                  key: spec.scope,
+                  ref: (element) => {
+                    const slot = rowRefs.current[index];
+                    if (slot !== undefined) slot.switches[column] = element ?? null;
+                  },
+                  type: 'button',
+                  role: 'switch',
+                  'aria-checked': spec.checked ? 'true' : 'false',
+                  'aria-disabled': snapshot.busy ? 'true' : 'false',
+                  'aria-label': `${entry.name} · ${spec.label}`,
+                  'data-context-control': 'scope',
+                  'data-context-control-scope': spec.scope,
+                  'data-context-control-entry': entryKey,
+                  'data-context-control-state': spec.checked ? 'on' : 'off',
+                  'data-context-control-pinned': spec.scope === 'session' ? (spec.bright ? 'true' : 'false') : undefined,
+                  style: {
+                    ...CSS.scopeSwitch,
+                    ...(spec.scope === 'session' ? CSS.scopeSession : CSS.scopeWorkspace),
+                  },
+                  onMouseEnter: (event) => { event.currentTarget.style.background = CSS.scopeSwitchHover.background; },
+                  onMouseLeave: (event) => { event.currentTarget.style.background = 'transparent'; },
+                  /* A finger or a pen held on the dot is the touch counterpart
+                   * of the two desktop gestures below: after LONG_PRESS_MS
+                   * without travel, the switch drops this conversation's own
+                   * choice. A mouse never arms it, however long it is held, so
+                   * a slow click stays a click. */
+                  onPointerDown: spec.scope === 'session'
+                    ? (event) => {
+                      armPress(pressKey, event, fire);
+                      tintPress(event, true);
+                    }
+                    : undefined,
+                  /* Travel past the slop is a scroll: hand the gesture back to
+                   * the list rather than unpinning on the way through. */
+                  onPointerMove: spec.scope === 'session'
+                    ? (event) => {
+                      if (!pressDrifted(pressKey, event)) return;
+                      cancelPress(pressKey);
+                      tintPress(event, false);
+                    }
+                    : undefined,
+                  onPointerUp: spec.scope === 'session'
+                    ? (event) => {
+                      cancelPress(pressKey);
+                      tintPress(event, false);
+                    }
+                    : undefined,
+                  onPointerCancel: spec.scope === 'session'
+                    ? (event) => {
+                      cancelPress(pressKey);
+                      tintPress(event, false);
+                    }
+                    : undefined,
+                  onPointerLeave: spec.scope === 'session'
+                    ? (event) => {
+                      cancelPress(pressKey);
+                      tintPress(event, false);
+                    }
+                    : undefined,
+                  /* Right-click unpins a session switch. The browser menu is
+                   * suppressed because the gesture is the control itself. */
+                  onContextMenu: spec.scope === 'session'
+                    ? (event) => {
+                      event.preventDefault();
+                      /* Android can raise the platform's own long-press menu
+                       * at the same moment as the timer: one gesture, one
+                       * request, so the timer goes rather than firing too. */
+                      cancelPress(pressKey);
+                      if (snapshot.busy) return;
+                      void fire();
+                    }
+                    : undefined,
+                  onClick: (event) => {
+                    /* The click the browser sends when a fired hold ends is
+                     * part of that hold, not a second action. */
+                    if (spec.scope === 'session' && pressFired(pressKey)) {
+                      event?.preventDefault?.();
+                      return;
+                    }
                     if (snapshot.busy) return;
-                    void followProject(state, sessionId, entry.kind, entry.name);
-                  }
-                  : undefined,
-                onClick: (event) => {
-                  if (snapshot.busy) return;
-                  /* Alt+click is the keyboard-adjacent version of the same
-                   * gesture, for a host where the secondary button is taken. */
-                  if (spec.scope === 'session' && event?.altKey) {
-                    void followProject(state, sessionId, entry.kind, entry.name);
-                    return;
-                  }
-                  void toggleState(state, sessionId, entry.kind, entry.name, !spec.checked, spec.scope);
-                },
-              }, h('span', {
-                /* A ring always; the dot says on, and the ring is bright only
-                 * for the switch that is deciding. The size never changes, so a
-                 * toggle cannot shift the row. */
-                style: spec.bright ? { ...CSS.radio, ...CSS.radioBright } : CSS.radio,
-                'aria-hidden': 'true',
-              }, spec.checked ? h('span', { style: CSS.radioDot }) : null)))),
+                    /* Alt+click is the keyboard-adjacent version of the same
+                     * gesture, for a host where the secondary button is taken. */
+                    if (spec.scope === 'session' && event?.altKey) {
+                      void fire();
+                      return;
+                    }
+                    void toggleState(state, sessionId, entry.kind, entry.name, !spec.checked, spec.scope);
+                  },
+                }, h('span', {
+                  /* A ring always; the dot says on, and the ring is bright only
+                   * for the switch that is deciding. The size never changes, so
+                   * a toggle cannot shift the row. */
+                  style: spec.bright ? { ...CSS.radio, ...CSS.radioBright } : CSS.radio,
+                  'aria-hidden': 'true',
+                }, spec.checked ? h('span', { style: CSS.radioDot }) : null));
+              })),
             );
           };
 

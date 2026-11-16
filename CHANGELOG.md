@@ -4,6 +4,20 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.9.1 — 2026-11-16
+
+- **A long press unpins a session switch.** The third state of a session dot —
+  following the project again — was reachable only with the secondary button or
+  an Alt+click, and a touch screen has neither, so a phone could pin an entry
+  and then never unpin it. Holding the dot for 500ms does the same thing there
+  (and ticks the phone's haptics where it has them). The gesture is armed by
+  `pointerType` alone — touch or pen — so a mouse held on the primary button
+  still just clicks; travel past 10px cancels the hold, so a finger scrolling
+  the list over a dot does not unpin it on its way through; and the click the
+  browser sends when the hold ends is swallowed, so one hold is one request.
+  The dot tints while the finger is down, because half a second of no visible
+  change reads as a dead control.
+
 ## 0.9.0 — 2026-11-13
 
 - **A branch inherits the conversation it was cut from.** DSH's ordinary fork
