@@ -4,6 +4,29 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.10.0 — 2026-11-21
+
+- **The pill carries a syringe mark.** Gating is what decides which components
+  get *injected* into the next request, so the mark says it: a side-on syringe —
+  plunger cap, rod, flange, barrel, needle — at 14px, the size the composer's
+  own icons use, coloured `--dsw-alias-state-business-primary` (light `#4176E6`,
+  dark `#7AAAFF`) so a themed host recolours it too. Strokes are `currentColor`
+  and the count sets tabular figures, so neither twitches as entries toggle. A
+  45° syringe was drawn first and dropped: measured on a real composer row at
+  this size it collapses into a blob with a spark on one end, while the side
+  view keeps five separable strokes. The mark is `aria-hidden` — the wordmark
+  and the count already say it.
+- **A narrow row drops the wordmark instead of shrinking the pill.** A phone's
+  composer row puts the add button, the permission seat, this pill, the model
+  picker and send on one line, and `组件上下文` costs as much room as the mark
+  plus the count. DSH's row already declares `container-type: inline-size`, so
+  the pill is measured against the room it actually has — a container query at
+  560px (DSH's own breakpoint) hides just the wordmark: the mark and `12/15`
+  stay, and on a 485px row the pill is 69px wide instead of 134px. A viewport
+  `@media` ruleset with the same breakpoint covers a host that does not declare
+  that container. The button's `aria-label` always spells the full name, so the
+  icon is never an unlabelled control where the row hides its text.
+
 ## 0.9.1 — 2026-11-16
 
 - **A long press unpins a session switch.** The third state of a session dot —

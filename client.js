@@ -282,7 +282,7 @@ window.__ModuleLoader__.load({
 
     const CSS = {
       pill: {
-        display: 'inline-flex', alignItems: 'center', gap: '4px',
+        display: 'inline-flex', alignItems: 'center', gap: '5px',
         alignSelf: 'center', whiteSpace: 'nowrap',
         /* `--dsw-alias-border-l` never existed in DSH, so every border fell
          * through to the neutral fallback; `l2` is the theme's hairline and
@@ -293,6 +293,16 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-secondary, inherit)',
         background: 'transparent', cursor: 'pointer',
       },
+      /* The mark is the pill's only brand-coloured pixel: the wordmark and the
+       * count stay the composer's secondary grey, so the pill reads as "this is
+       * where context gets injected", not as a status light. */
+      logo: {
+        display: 'inline-flex', alignItems: 'center', flex: 'none',
+        color: 'var(--dsw-alias-state-business-primary, #4176e6)',
+      },
+      /* Counts sit in a column of their own: tabular digits keep `3/5` from
+       * shifting a pixel as entries toggle. */
+      pillCount: { fontVariantNumeric: 'tabular-nums' },
       anchor: {
         position: 'relative', display: 'inline-flex', alignItems: 'center',
       },
@@ -557,6 +567,39 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* ---- The wordmark gives way on a narrow row ----
+     * `组件上下文` costs about as much room as the number plus the mark, and a
+     * phone's composer row has one line for the add button, the permission
+     * seat, this pill, the model picker and send. Below 560px of row the pill
+     * drops the wordmark and keeps the mark and the count; the accessible name
+     * on the button still spells the whole thing out.
+     *
+     * The query is a container one, aimed at DSH's own composer row
+     * (`container-type: inline-size`): that is the room the pill actually has,
+     * so a narrow mixer pane on a wide desktop compacts too. The viewport
+     * media query is the fallback for a host that does not declare that
+     * container. Both rules hide the same class; there is no third state. */
+    const PILL_LABEL_CLASS = 'dsh-context-control-pill-label';
+    const PILL_RULES_ID = 'dsh-context-control-pill-rules';
+    function ensurePillRules() {
+      try {
+        if (typeof document === 'undefined' || typeof document.createElement !== 'function') return;
+        if (typeof document.getElementById === 'function' && document.getElementById(PILL_RULES_ID) !== null) return;
+        const style = document.createElement('style');
+        style.id = PILL_RULES_ID;
+        style.textContent = [
+          `.${PILL_LABEL_CLASS} { display: inline; }`,
+          `@container (max-width: 560px) { .${PILL_LABEL_CLASS} { display: none; } }`,
+          `@media (max-width: 560px) { .${PILL_LABEL_CLASS} { display: none; } }`,
+        ].join('\n');
+        const holder = document.head ?? document.body;
+        if (holder !== null && holder !== undefined && typeof holder.appendChild === 'function') holder.appendChild(style);
+      } catch {
+        /* Without the rules the wordmark simply stays: a wider pill, never a
+         * broken one. */
+      }
+    }
+
     /* ---- The hold that unpins ----
      * A session switch has a third state — following the project — which a
      * desktop reaches with the secondary button or Alt+click. A touch screen
@@ -589,6 +632,7 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'sessions', 'locale', 'remote'],
       async apply(ctx) {
         ensureSpinKeyframes();
+        ensurePillRules();
         /* Mount the descriptor contribution: this is what creates the
          * remote.contextControl namespace service. */
         const unmount = await ctx.remote.$mount(CONTEXT_CONTROL_CONTRIBUTION);
@@ -1148,6 +1192,42 @@ window.__ModuleLoader__.load({
           return on.length === 0 ? t('pillHint') : `${t('pillHint')}\n${t('on')}${on.join('、')}`;
         }
 
+        /* The pill's mark. Gating is what decides which components are
+         * *injected* into the next request — MCP tools, skills, built-in
+         * tools — so a syringe says it in the one word a composer row has
+         * room for.
+         *
+         * Sideways, not tilted: at 13–14px a 45° syringe collapses into a
+         * blob with a spark on one end (measured on the real composer row),
+         * while the side view keeps five separable strokes — plunger cap, rod,
+         * flange, barrel, needle. The needle is drawn thinner than the barrel
+         * so the eye reads "long thin end" before it reads the fill level.
+         *
+         * `currentColor` everywhere; the brand blue comes from CSS.logo, so a
+         * theme that redefines `--dsw-alias-state-business-primary` recolours
+         * the mark too. */
+        function SyringeMark() {
+          return h('svg', {
+            viewBox: '0 0 16 16',
+            width: '14',
+            height: '14',
+            fill: 'none',
+            stroke: 'currentColor',
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+            'aria-hidden': 'true',
+            focusable: 'false',
+            'data-context-control': 'logo',
+            style: CSS.logo,
+          },
+            h('path', { d: 'M1.7 5.7v4.6', strokeWidth: '1.3' }),
+            h('path', { d: 'M1.7 8h1.9', strokeWidth: '1.3' }),
+            h('path', { d: 'M3.6 3.9v8.2', strokeWidth: '1.5' }),
+            h('rect', { x: '3.6', y: '5.7', width: '6.2', height: '4.6', rx: '0.9', strokeWidth: '1.5' }),
+            h('path', { d: 'M9.8 8h4.3', strokeWidth: '1.2' }),
+          );
+        }
+
         /* Collapsed pill in the composer tool row, right of the permission
          * seat. Clicking it opens a context-menu style popover anchored to
          * the pill (portal into body, fixed coordinates above the anchor).
@@ -1181,7 +1261,15 @@ window.__ModuleLoader__.load({
           if (snapshot.data !== undefined && servers.length === 0 && skills.length === 0 && tools.length === 0) return null;
           const enabledOf = (entries) => entries.filter((entry) => entry.enabled).length;
           const all = [...servers, ...skills, ...tools];
-          const countLabel = `${t('panel')}${snapshot.data === undefined ? '' : ` ${enabledOf(all)}/${all.length}`}${snapshot.busy ? t('busy') : ''}`;
+          /* The count is the pill's whole readable payload where the wordmark
+           * is hidden, so it is its own span: the stylesheet can drop the
+           * label without touching the number. */
+          const count = snapshot.data === undefined
+            ? (snapshot.busy ? t('busy') : '')
+            : `${enabledOf(all)}/${all.length}${snapshot.busy ? t('busy') : ''}`;
+          /* The button's accessible name never depends on what the row can
+           * afford: with the wordmark hidden, the icon has no text at all. */
+          const accessibleName = count === '' ? t('panel') : `${t('panel')} ${count}`;
           const close = (restoreFocus) => {
             setOpen(false);
             if (!restoreFocus) return;
@@ -1196,6 +1284,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               style: CSS.pill,
               title,
+              'aria-label': accessibleName,
               'data-context-control-update': update.phase === 'available' ? 'available' : undefined,
               onClick: () => {
                 const next = !open;
@@ -1209,7 +1298,14 @@ window.__ModuleLoader__.load({
                 event.currentTarget.style.background = 'transparent';
               },
             },
-              countLabel,
+              h(SyringeMark),
+              h('span', {
+                className: PILL_LABEL_CLASS,
+                'data-context-control': 'label',
+              }, t('panel')),
+              count === ''
+                ? null
+                : h('span', { style: CSS.pillCount, 'data-context-control': 'count' }, count),
               update.phase === 'available'
                 ? h('span', { key: '__update', style: CSS.updateDot, 'data-context-control': 'update-dot' }, '↑')
                 : null,

@@ -214,7 +214,12 @@ The panel lists each **gateable built-in tool** as its own row, alongside MCP
 servers and skills — with two radio dots per row (blue = session, violet = workspace, see
 above). The three kinds (MCP / skills / tools) are switched with
 tabs instead of stacking three groups; each tab shows its own `on/total`, and
-the pill sums the three: `Components 3/5`. Every row also carries a one-line
+the pill sums the three: `[💉] Components 3/5` — the syringe is the pill's mark,
+because gating is what decides which components get injected into the request.
+When the composer row is narrower than 560px (a phone, or a mixer pane dragged
+narrow) the pill keeps the mark and the count and drops the word — `[💉] 3/16`;
+the button's `aria-label` always spells the full name, so it is never an
+unlabelled control where the text is hidden. Every row also carries a one-line
 description taken from the resource itself: tools use their schema
 `description`, skills use the catalog description, and an MCP server uses its
 `instructions` prose (read from the text provider registered as the `mcp:<server>` system-prompt section, so it is available before the host has assembled a single prompt; a server that publishes none shows its tool count). Hover

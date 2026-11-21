@@ -242,6 +242,18 @@ function find(node, predicate) {
   return found;
 }
 
+/* The pill reads as its wordmark and its count, with a space between them on
+ * screen (`组件上下文 3/5`). Both live in spans of their own so the stylesheet
+ * can hide the wordmark on a narrow row; this joins them the way the wide row
+ * reads, instead of depending on one concatenated string that a `display:none`
+ * would not even change in this fake DOM. */
+function pillText(node) {
+  const textOfKind = (kind) => find(node, (element) => element.props?.['data-context-control'] === kind)
+    .map((element) => find(element, (child) => child.text !== undefined).map((child) => child.text).join(''))
+    .join('');
+  return `${textOfKind('label')} ${textOfKind('count')}`.trim();
+}
+
 function keydown(key) {
   let prevented = false;
   const event = { key, preventDefault() { prevented = true; } };
@@ -554,9 +566,51 @@ const fakeCtx = {
   check('pill text shows enabled/total', () => {
     const button = find(tree, (element) => element.tag === 'button')[0];
     assert(button !== undefined, 'no pill button');
+    assert(pillText(button) === '组件上下文 3/5', `pill text is "${pillText(button)}"`);
     const text = find(button, (element) => element.text !== undefined).map((element) => element.text).join('');
-    assert(text.includes('组件上下文 3/5'), `pill text is "${text}"`);
     assert(!text.includes('tok') && !text.includes('~'), `pill must not estimate tokens: "${text}"`);
+    assert(button.props['aria-label'] === '组件上下文 3/5',
+      `accessible name is "${button.props['aria-label']}"`);
+  });
+
+  check('the pill carries a syringe mark in front of the wordmark', () => {
+    const button = find(tree, (element) => element.tag === 'button')[0];
+    const marks = find(button, (element) => element.props?.['data-context-control'] === 'logo');
+    assert(marks.length === 1, `mounted ${marks.length} marks`);
+    const mark = marks[0];
+    assert(mark.tag === 'svg', `the mark is <${mark.tag}>`);
+    assert(mark.props['aria-hidden'] === 'true', 'the decorative mark is exposed to assistive tech');
+    assert(String(mark.props.style.color).includes('state-business-primary'),
+      `the mark is not brand-coloured: ${mark.props.style.color}`);
+    assert(mark.props.width === '14', `the mark is ${mark.props.width}px, not 14px like its neighbours`);
+    /* Side-on: plunger cap, plunger rod, flange, barrel, needle. Five strokes,
+     * and the needle last, drawn thinner than the barrel. */
+    const shapes = mark.children;
+    assert(shapes.length === 5, `the mark has ${shapes.length} strokes`);
+    assert(shapes[0].tag === 'path' && shapes[0].props.strokeWidth === '1.3', 'the plunger cap is missing');
+    assert(shapes[1].tag === 'path' && shapes[1].props.d === 'M1.7 8h1.9', `no plunger rod: ${shapes[1].props.d}`);
+    assert(shapes[2].tag === 'path' && shapes[2].props.d === 'M3.6 3.9v8.2', `no flange: ${shapes[2].props.d}`);
+    assert(shapes[3].tag === 'rect', 'the barrel is not a rect');
+    assert(shapes[3].props.width === '6.2' && shapes[3].props.height === '4.6',
+      `the barrel is ${shapes[3].props.width}x${shapes[3].props.height}`);
+    assert(shapes[4].tag === 'path' && shapes[4].props.d === 'M9.8 8h4.3',
+      `no needle: ${shapes[4].props.d}`);
+    assert(Number(shapes[4].props.strokeWidth) < Number(shapes[3].props.strokeWidth),
+      'the needle is not drawn thinner than the barrel');
+    assert(button.children[0] === mark, 'the mark does not lead the pill');
+  });
+
+  check('the wordmark gives way below 560px of composer row', () => {
+    const sheet = documentStub.getElementById('dsh-context-control-pill-rules');
+    assert(sheet !== null, 'the pill stylesheet was not injected');
+    const css = String(sheet.textContent);
+    assert(css.includes('@container (max-width: 560px)'), `no container query: "${css}"`);
+    assert(css.includes('@media (max-width: 560px)'), `no viewport fallback: "${css}"`);
+    assert(/@(?:container|media) \(max-width: 560px\) \{ \.dsh-context-control-pill-label \{ display: none; \} \}/.test(css),
+      `hub rule does not hide the wordmark: "${css}"`);
+    const label = find(tree, (element) => element.props?.['data-context-control'] === 'label')[0];
+    assert(label !== undefined && label.props.className === 'dsh-context-control-pill-label',
+      'the wordmark span does not carry the class the rules hide');
   });
 
   check('pill tooltip lists enabled entries', () => {
@@ -1009,11 +1063,9 @@ const fakeCtx = {
   check('each pane pill reports its own Session', () => {
     const anchors = anchorsOf(panesTree);
     assert(anchors.length === 2, `mounted ${anchors.length} pills`);
-    const textOf = (anchor) => find(anchor, (element) => element.text !== undefined)
-      .map((element) => element.text).join('');
     assert(remoteCalls.some((call) => call[0] === 'list' && call[1] === 's2'), JSON.stringify(remoteCalls));
-    assert(textOf(anchors[0]).includes('组件上下文 3/5'), `pane 1 text is "${textOf(anchors[0])}"`);
-    assert(textOf(anchors[1]).includes('组件上下文 1/2'), `pane 2 text is "${textOf(anchors[1])}"`);
+    assert(pillText(anchors[0]) === '组件上下文 3/5', `pane 1 text is "${pillText(anchors[0])}"`);
+    assert(pillText(anchors[1]) === '组件上下文 1/2', `pane 2 text is "${pillText(anchors[1])}"`);
   });
 
   anchorsOf(panesTree)[0].children[0].props.onClick();
@@ -1208,8 +1260,8 @@ const fakeCtx = {
   check('a pending update badges the pill without changing its text', () => {
     const badge = find(updateTree, (element) => element.props?.['data-context-control-update'] === 'available')[0];
     assert(badge !== undefined, 'no update badge on the pill');
-    assert(textOf(badge).includes('组件上下文 3/5'), `pill text changed: "${textOf(badge)}"`);
-    assert(textOf(badge).includes('↑'), 'the badge marker is missing');
+    assert(pillText(badge) === '组件上下文 3/5', `pill text changed: "${pillText(badge)}"`);
+    assert(find(badge, (element) => element.text === '↑').length > 0, 'the badge marker is missing');
     assert(badge.props.title.includes('有新版本'), 'the tooltip does not mention the update');
   });
 
