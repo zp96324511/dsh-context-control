@@ -293,12 +293,10 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-secondary, inherit)',
         background: 'transparent', cursor: 'pointer',
       },
-      /* The mark is the pill's only brand-coloured pixel: the wordmark and the
-       * count stay the composer's secondary grey, so the pill reads as "this is
-       * where context gets injected", not as a status light. */
+      /* The mark is drawn, not tinted: it inherits the pill's own label colour,
+       * so it reads as part of the wordmark rather than as a status light. */
       logo: {
         display: 'inline-flex', alignItems: 'center', flex: 'none',
-        color: 'var(--dsw-alias-state-business-primary, #4176e6)',
       },
       /* Counts sit in a column of their own: tabular digits keep `3/5` from
        * shifting a pixel as entries toggle. */
@@ -1197,20 +1195,22 @@ window.__ModuleLoader__.load({
          * tools — so a syringe says it in the one word a composer row has
          * room for.
          *
-         * Sideways, not tilted: at 13–14px a 45° syringe collapses into a
-         * blob with a spark on one end (measured on the real composer row),
-         * while the side view keeps five separable strokes — plunger cap, rod,
-         * flange, barrel, needle. The needle is drawn thinner than the barrel
-         * so the eye reads "long thin end" before it reads the fill level.
+         * Tilted 45°, the way every icon set draws one: level, the same
+         * strokes read as a pin (head, shaft, point) — that is what the first
+         * cut of this mark looked like on a real row. Tilted, the plunger
+         * sticks out of the back at a visible angle and the needle leaves the
+         * barrel at a corner, so the silhouette is a syringe and not a pin.
+         * Six strokes: plunger cap, rod, flange, barrel, needle hub, needle —
+         * the rod is thinner than the flange and the needle thinner again.
          *
-         * `currentColor` everywhere; the brand blue comes from CSS.logo, so a
-         * theme that redefines `--dsw-alias-state-business-primary` recolours
-         * the mark too. */
+         * Drawn in `currentColor`, so it takes the pill's label colour: an
+         * accent-coloured mark in a row of grey ones read as a notification
+         * badge rather than as part of the wordmark. */
         function SyringeMark() {
           return h('svg', {
             viewBox: '0 0 16 16',
-            width: '14',
-            height: '14',
+            width: '16',
+            height: '16',
             fill: 'none',
             stroke: 'currentColor',
             strokeLinecap: 'round',
@@ -1219,13 +1219,14 @@ window.__ModuleLoader__.load({
             focusable: 'false',
             'data-context-control': 'logo',
             style: CSS.logo,
-          },
-            h('path', { d: 'M1.7 5.7v4.6', strokeWidth: '1.3' }),
-            h('path', { d: 'M1.7 8h1.9', strokeWidth: '1.3' }),
-            h('path', { d: 'M3.6 3.9v8.2', strokeWidth: '1.5' }),
-            h('rect', { x: '3.6', y: '5.7', width: '6.2', height: '4.6', rx: '0.9', strokeWidth: '1.5' }),
-            h('path', { d: 'M9.8 8h4.3', strokeWidth: '1.2' }),
-          );
+          }, h('g', { transform: 'rotate(-45 8 8)' },
+            h('path', { d: 'M2.6 6.9v2.2', strokeWidth: '1.3' }),
+            h('path', { d: 'M2.6 8h1.4', strokeWidth: '1.3' }),
+            h('path', { d: 'M4 3.9v8.2', strokeWidth: '1.4' }),
+            h('rect', { x: '4.8', y: '6.1', width: '6.2', height: '3.8', rx: '0.8', strokeWidth: '1.4' }),
+            h('path', { d: 'M11 6.9v2.2', strokeWidth: '1.4' }),
+            h('path', { d: 'M11 8h3.4', strokeWidth: '1.1' }),
+          ));
         }
 
         /* Collapsed pill in the composer tool row, right of the permission

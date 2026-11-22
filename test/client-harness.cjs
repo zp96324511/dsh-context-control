@@ -580,22 +580,23 @@ const fakeCtx = {
     const mark = marks[0];
     assert(mark.tag === 'svg', `the mark is <${mark.tag}>`);
     assert(mark.props['aria-hidden'] === 'true', 'the decorative mark is exposed to assistive tech');
-    assert(String(mark.props.style.color).includes('state-business-primary'),
-      `the mark is not brand-coloured: ${mark.props.style.color}`);
-    assert(mark.props.width === '14', `the mark is ${mark.props.width}px, not 14px like its neighbours`);
-    /* Side-on: plunger cap, plunger rod, flange, barrel, needle. Five strokes,
-     * and the needle last, drawn thinner than the barrel. */
-    const shapes = mark.children;
-    assert(shapes.length === 5, `the mark has ${shapes.length} strokes`);
-    assert(shapes[0].tag === 'path' && shapes[0].props.strokeWidth === '1.3', 'the plunger cap is missing');
-    assert(shapes[1].tag === 'path' && shapes[1].props.d === 'M1.7 8h1.9', `no plunger rod: ${shapes[1].props.d}`);
-    assert(shapes[2].tag === 'path' && shapes[2].props.d === 'M3.6 3.9v8.2', `no flange: ${shapes[2].props.d}`);
-    assert(shapes[3].tag === 'rect', 'the barrel is not a rect');
-    assert(shapes[3].props.width === '6.2' && shapes[3].props.height === '4.6',
+    assert(!('color' in mark.props.style), `the mark overrides the pill colour with ${mark.props.style.color}`);
+    assert(mark.props.stroke === 'currentColor', `the mark is stroked with ${mark.props.stroke}`);
+    assert(mark.props.width === '16', `the mark is ${mark.props.width}px, not 16px`);
+    /* Tilted 45°, six strokes: plunger cap, rod, flange, barrel, hub, needle. */
+    const group = mark.children[0];
+    assert(group.tag === 'g' && group.props.transform === 'rotate(-45 8 8)',
+      `the mark is level, which reads as a pin: ${group?.props?.transform}`);
+    const shapes = group.children;
+    assert(shapes.length === 6, `the mark has ${shapes.length} strokes`);
+    assert(shapes[0].props.d === 'M2.6 6.9v2.2' && shapes[1].props.d === 'M2.6 8h1.4',
+      'the plunger is not a cap over a rod');
+    assert(shapes[2].props.d === 'M4 3.9v8.2', 'the flange is missing');
+    assert(shapes[3].tag === 'rect' && shapes[3].props.width === '6.2' && shapes[3].props.height === '3.8',
       `the barrel is ${shapes[3].props.width}x${shapes[3].props.height}`);
-    assert(shapes[4].tag === 'path' && shapes[4].props.d === 'M9.8 8h4.3',
-      `no needle: ${shapes[4].props.d}`);
-    assert(Number(shapes[4].props.strokeWidth) < Number(shapes[3].props.strokeWidth),
+    assert(shapes[4].props.d === 'M11 6.9v2.2', 'the needle hub is missing');
+    assert(shapes[5].props.d === 'M11 8h3.4', `no needle: ${shapes[5].props.d}`);
+    assert(Number(shapes[5].props.strokeWidth) < Number(shapes[3].props.strokeWidth),
       'the needle is not drawn thinner than the barrel');
     assert(button.children[0] === mark, 'the mark does not lead the pill');
   });

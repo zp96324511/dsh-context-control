@@ -4,6 +4,24 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.10.1 — 2026-11-21
+
+- **The mark is the pill's own grey, and it is tilted.** 0.10.0 shipped it in
+  the brand blue and level. On a real 100% display that combination read as a
+  pushpin: a head (flange), a shaft (barrel) and a point (needle), with the
+  plunger hidden behind the flange, and the blue made it look like a
+  notification dot parked next to the wordmark. It is now stroked in
+  `currentColor` — the same `--dsw-alias-label-secondary` the wordmark uses, so
+  it reads as part of the label — and drawn at 45° the way icon sets draw a
+  syringe: the plunger sticks out of the back at a visible angle and the needle
+  leaves the barrel at a corner, which breaks the pin silhouette. Six strokes,
+  with the needle thinner than the barrel. 16px rather than 14px: the tilt costs
+  the axis-aligned edge that made the level version sharp, and the extra 2px buys
+  it back.
+- **The mark inherits instead of tinting.** `CSS.logo` no longer sets a colour,
+  so a theme, a disabled pill or a future variant colours the mark without
+  touching the SVG.
+
 ## 0.10.0 — 2026-11-21
 
 - **The pill carries a syringe mark.** Gating is what decides which components
