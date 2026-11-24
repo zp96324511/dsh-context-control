@@ -738,31 +738,123 @@ export async function apply(ctx, config) {
   }
 
   /**
-   * Built-in tools this agent can see, minus the MCP names (grouped by server
-   * elsewhere), the shared resource tools, the protected ones, and the tools
-   * that gate themselves (see `gateable`). Reads the agent's unrestricted view,
-   * so call it while this plugin's own restriction is lifted.
+   * Built-in tools this agent can see, split by who decides whether one is on.
+   * MCP names (grouped by server elsewhere), the shared resource tools and the
+   * protected ones are in neither set.
+   *
+   * `gateable` is what the panel switches. `auto` is the tools that gate
+   * themselves — registered with a `when`, so the step decides and the panel can
+   * only report the state (see `autoToolState`); they are never stored, never
+   * denied and never listed as switches.
+   *
+   * Reads the agent's unrestricted view, so call it while this plugin's own
+   * restriction is lifted.
    * @param scopeCtx - an agent context, or the plugin context for the global view.
+   * @returns {{ gateable: Set<string>, auto: Set<string> }}
    */
-  function builtinToolInventory(scopeCtx) {
-    const known = new Set()
+  function builtinToolScan(scopeCtx) {
+    const switchable = new Set()
+    const auto = new Set()
     let schemas
     try {
       schemas = scopeCtx.tools.schemas()
     } catch (error) {
       warn(ctx, `built-in tool scan failed: ${String(error)}`)
-      return known
+      return { gateable: switchable, auto }
     }
     for (const schema of schemas) {
       const toolName = schema.name
       if (typeof toolName !== 'string' || toolName === '') continue
       if (MCP_TOOL_NAME.test(toolName)) continue
       if (RESOURCE_TOOL_NAMES.has(toolName) || PROTECTED_TOOL_NAMES.has(toolName)) continue
-      if (!gateable(scopeCtx, toolName)) continue
-      known.add(toolName)
       rememberSchema(schema)
+      if (gateable(scopeCtx, toolName)) switchable.add(toolName)
+      else auto.add(toolName)
     }
-    return known
+    return { gateable: switchable, auto }
+  }
+
+  /* ---------- self-gating tools: read-only state ---------- */
+
+  /** How long one panel read may spend probing self-gating tools, in total. */
+  const AUTO_PROBE_BUDGET_MS = 300
+  const PROBE_TIMED_OUT = Symbol('probe timed out')
+
+  /** The selection a step would hand to `when`, as it stands right now. */
+  function currentSelection(agent) {
+    try {
+      return agent.model?.current?.()
+    } catch (error) {
+      warn(ctx, `reading the model selection failed: ${String(error)}`)
+      return undefined
+    }
+  }
+
+  /** The `when` a self-gating tool was registered with (unscoped view). */
+  function autoWhenOf(agent, name) {
+    try {
+      return agent.ctx.tools.view?.(undefined)?.registrations?.get(name)?.when
+    } catch (error) {
+      warn(ctx, `reading the registration of "${name}" failed: ${String(error)}`)
+      return undefined
+    }
+  }
+
+  /**
+   * What a self-gating tool would decide right now: `true`/`false`, or `null`
+   * for "cannot tell" (no readable registration, or a `when` that threw or ran
+   * past the budget — the panel then says just "auto").
+   *
+   * Read-only by construction: the verdict never reaches `reconcile`,
+   * `denyFor` or the stored choices, so a panel read cannot change what the
+   * next step admits. `when` is a step-time predicate, so it runs here only to
+   * answer a question the user asked by opening the panel.
+   */
+  async function autoToolState(agent, name, budgetMs) {
+    const when = autoWhenOf(agent, name)
+    if (typeof when !== 'function') return null
+    const controller = new AbortController()
+    let timer
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => { controller.abort(new Error('probe budget')); resolve(PROBE_TIMED_OUT) }, budgetMs)
+      /* Never keep the host alive for a panel read. */
+      timer.unref?.()
+    })
+    try {
+      const verdict = await Promise.race([
+        Promise.resolve(when({ agent, modelSelection: currentSelection(agent), signal: controller.signal })),
+        timeout,
+      ])
+      if (verdict === PROBE_TIMED_OUT) return null
+      return verdict === true
+    } catch (error) {
+      warn(ctx, `self-gating tool "${name}" probe failed: ${String(error)}`)
+      return null
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * Probe every self-gating tool once per (session, model selection): reopening
+   * the panel for the same model costs nothing, and an expensive `when` runs at
+   * most once per selection. A tool registered since the last scan is probed on
+   * the next read (the cached map is discarded when it does not cover `names`).
+   */
+  async function autoToolStates(entry, names) {
+    const selection = currentSelection(entry.agent)
+    const key = `${selection?.provider ?? ''}\u0000${selection?.model ?? ''}\u0000${selection?.reasoningEffort ?? ''}`
+    const cached = entry.autoStates
+    if (entry.autoStateKey === key && cached !== undefined && names.every((name) => cached.has(name))) {
+      return cached
+    }
+    const states = new Map()
+    await Promise.all(names.map(async (name) => {
+      states.set(name, await autoToolState(entry.agent, name, AUTO_PROBE_BUDGET_MS))
+    }))
+    entry.autoStateKey = key
+    entry.autoStates = states
+    return states
   }
 
   /** Visible tool names in one agent's current (possibly restricted) view. */
@@ -917,7 +1009,8 @@ export async function apply(ctx, config) {
    * choice for follows the workspace, exactly like a fresh attach.
    */
   function refreshBuiltinTools(entry) {
-    const known = builtinToolInventory(entry.agent.ctx)
+    const scan = builtinToolScan(entry.agent.ctx)
+    const known = scan.gateable
     const enabled = sessionTools(entry.agent.id, entry.cwd, known)
     for (const name of known) {
       if (entry.knownTools.has(name)) continue
@@ -928,6 +1021,15 @@ export async function apply(ctx, config) {
       if (known.has(name)) continue
       entry.knownTools.delete(name)
       entry.tools.delete(name)
+    }
+    /* Self-gating tools are not stored, but the set can change too (a plugin
+     * re-registers one). A new member invalidates the cached verdicts. */
+    const auto = entry.autoTools ?? new Set()
+    const changed = auto.size !== scan.auto.size || [...scan.auto].some((name) => !auto.has(name))
+    entry.autoTools = scan.auto
+    if (changed) {
+      entry.autoStateKey = undefined
+      entry.autoStates = undefined
     }
   }
 
@@ -1081,12 +1183,18 @@ export async function apply(ctx, config) {
     scanAgentTools(agent)
     const cwd = agent.session.header.cwd ?? ''
     /* Read the built-in view before this plugin's own restriction exists. */
-    const knownTools = builtinToolInventory(agent.ctx)
+    const scan = builtinToolScan(agent.ctx)
+    const knownTools = scan.gateable
     const entry = {
       agent, cwd,
       mcp: sessionMcp(agent.id, cwd),
       tools: sessionTools(agent.id, cwd, knownTools),
       knownTools,
+      /* Tools that gate themselves: the panel reports their state, nothing
+       * here is stored, denied or offered as a switch. */
+      autoTools: scan.auto,
+      autoStateKey: undefined,
+      autoStates: undefined,
       knownMcp: new Set(inventory.keys()),
       skills: new Set(), knownSkills: new Set(), sources: new Map(),
       skillDescriptions: new Map(),
@@ -1244,7 +1352,8 @@ export async function apply(ctx, config) {
           description: oneLine(description ?? ''),
         }
       })
-      const knownTools = entry !== undefined ? entry.knownTools : builtinToolInventory(ctx)
+      const scan = entry !== undefined ? undefined : builtinToolScan(ctx)
+      const knownTools = entry !== undefined ? entry.knownTools : scan.gateable
       const workspaceToolSet = workspaceTools(cwd, knownTools)
       const toolsEnabled = entry !== undefined
         ? entry.tools
@@ -1259,6 +1368,28 @@ export async function apply(ctx, config) {
         detail: '',
         description: oneLine(toolDescriptions.get(toolName) ?? ''),
       }))
+      /* Self-gating tools: shown, never switchable. Their state is whatever
+       * the step would decide right now, which only a live agent can answer —
+       * without one the row says "auto" and nothing more. */
+      const autoNames = [...(entry !== undefined ? entry.autoTools ?? [] : scan.auto)].sort()
+      if (autoNames.length > 0) {
+        const states = entry !== undefined ? await autoToolStates(entry, autoNames) : new Map()
+        for (const toolName of autoNames) {
+          const live = states.get(toolName) ?? null
+          tools.push({
+            kind: 'tool',
+            name: toolName,
+            enabled: live === true,
+            workspace: false,
+            pinned: false,
+            official: true,
+            auto: true,
+            live,
+            detail: '',
+            description: oneLine(toolDescriptions.get(toolName) ?? ''),
+          })
+        }
+      }
       return { sessionId, cwd, mcp: servers, skills, tools }
     },
     async set(sessionId, kind, target, enabled, scope) {
@@ -1324,6 +1455,9 @@ export async function apply(ctx, config) {
         if (PROTECTED_TOOL_NAMES.has(target)) {
           return { ok: false, reason: `"${target}" is protected and cannot be gated` }
         }
+        if (entry.autoTools?.has(target) === true) {
+          return { ok: false, reason: `"${target}" decides from session conditions inside the step; it is shown read-only` }
+        }
         if (!entry.knownTools.has(target)) {
           return { ok: false, reason: `unknown tool "${target}"; call list first` }
         }
@@ -1371,6 +1505,7 @@ export async function apply(ctx, config) {
       + 'Gated entries contribute no tool schemas, no prompt sections, and no catalog lines until enabled; changes take effect on the next model request. '
       + 'Official entries start enabled; user-configured MCP servers and skills start disabled; built-in tools start enabled. '
       + 'Protected tools (run_code, context_control, structured_output) cannot be gated. Call list first for exact names. '
+      + 'Rows with auto=true gate themselves from session conditions (for example a vision bridge that only exists for text models): they are reported with their live state in `live` (true, false, or null when it cannot be told) and cannot be enabled or disabled here. '
       + 'scope=session (default) changes this conversation only and is kept for it when it is reopened, even after a host restart; scope=workspace records the choice as this workspace\'s default, applies it here, and is inherited by sessions started here later; scope=follow drops this conversation\'s own choice so the entry follows the workspace default again. '
       + 'The user can also toggle either scope from the composer panel, and unpins a conversation with a right-click or Alt+click on its session dot.',
     parameters: {

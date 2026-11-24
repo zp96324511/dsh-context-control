@@ -53,6 +53,10 @@ window.__ModuleLoader__.load({
         official: { type: 'boolean' },
         detail: { type: 'string' },
         description: { type: 'string' },
+        /* Self-gating tool: the step decides, the panel only reports. `live` is
+         * the verdict as of this read, or null when it cannot be told. */
+        auto: { type: 'boolean' },
+        live: { type: ['boolean', 'null'] },
       },
       required: ['kind', 'name', 'enabled', 'official', 'detail'],
       additionalProperties: false,
@@ -69,6 +73,11 @@ window.__ModuleLoader__.load({
       official: zod.boolean(),
       detail: zod.string(),
       description: zod.string().optional(),
+      /* Present only for tools that gate themselves (a `when` registration):
+       * the panel shows them with a chip instead of the two switches, and
+       * `live` is what the step would decide right now (null = cannot tell). */
+      auto: zod.boolean().optional(),
+      live: zod.boolean().nullable().optional(),
     });
     const listResultSchema = () => zod.object({
       sessionId: zod.string(),
@@ -209,7 +218,12 @@ window.__ModuleLoader__.load({
           + '会话级仅作用于当前会话，重新打开该会话时（含宿主重启后）仍保留；会话归档后恢复，则重新继承工作区级设置。\n'
           + '会话未对该条目单独设置时处于跟随状态：圆环保持暗色，圆心与工作区级开关一致。右键、按住 Alt 点击，或用手指长按会话级开关，可取消钉住，恢复跟随。\n'
           + '工作区级写入本项目的默认值：本会话未对该条目单独设置时立即采用，此后在本项目新建的会话继承该值。\n'
-          + '两者同时存在时，会话级设置优先。所有变更在下次模型请求时生效。',
+          + '两者同时存在时，会话级设置优先。所有变更在下次模型请求时生效。\n'
+          + '标为「自动」的条目由宿主按会话条件自行启停（例如多模态模型下自动关闭的视觉桥），面板只显示此刻的状态，不能手动开关。',
+        auto: '自动',
+        autoOn: '自动 · 开',
+        autoOff: '自动 · 关',
+        autoHint: '该工具由宿主按会话条件自行启停，面板只显示此刻的状态，不能手动开关',
         pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具',
         hintToggle: '使用说明',
         on: '已启用：',
@@ -251,7 +265,12 @@ window.__ModuleLoader__.load({
           + 'The session scope applies to the current conversation only and is retained when that conversation is reopened, including after a host restart; a conversation restored from the archive inherits the workspace scope again.\n'
           + 'An entry this conversation has not set is following: its ring stays dim and the dot matches the workspace switch. A right-click, an Alt+click, or a long press on the session switch unpins it and restores that following state.\n'
           + 'The workspace scope writes this project\u2019s default: it is adopted at once by a conversation that has no choice of its own for that entry, and conversations opened in this project later inherit it.\n'
-          + 'When both are set, the session scope takes precedence. Every change takes effect on the next model request.',
+          + 'When both are set, the session scope takes precedence. Every change takes effect on the next model request.\n'
+          + 'Rows marked "auto" are switched by the host from session conditions (for example a vision bridge that turns itself off for a multimodal model): the panel reports the state as of this read and offers no switch.',
+        auto: 'auto',
+        autoOn: 'auto · on',
+        autoOff: 'auto · off',
+        autoHint: 'The host switches this tool from session conditions; the panel reports the state and cannot switch it',
         pillHint: 'Components: click to switch MCP servers, skills and built-in tools on or off',
         hintToggle: 'Usage notes',
         on: 'Enabled: ',
@@ -452,6 +471,17 @@ window.__ModuleLoader__.load({
         width: '5px', height: '5px', borderRadius: '50%',
         background: 'currentColor',
       },
+      /* A self-gating row gets one chip where its switches would be: it says
+       * who decides instead of pretending the panel does. Muted like the badge,
+       * tinted only when the step currently admits the tool. */
+      autoChip: {
+        display: 'inline-flex', alignItems: 'center', flex: 'none',
+        fontSize: '10px', lineHeight: '14px', padding: '0 5px',
+        borderRadius: '7px', whiteSpace: 'nowrap',
+        color: 'var(--dsw-alias-label-tertiary, rgba(128,128,128,.7))',
+        background: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))',
+      },
+      autoChipOn: { color: 'var(--dsw-alias-state-business-primary, #247bbf)' },
       /* The one `@keyframes` rule this panel needs (the update spinner) lives
        * in an injected stylesheet; see ensureSpinKeyframes. */
       spinner: {
@@ -1379,7 +1409,9 @@ window.__ModuleLoader__.load({
                 onCloseRef.current(true);
                 return;
               }
-              const rows = rowRefs.current.filter((row) => row != null);
+              /* Self-gating rows carry no switch, so the arrow walk steps over
+               * them instead of stalling on an empty column. */
+              const rows = rowRefs.current.filter((row) => row != null && row.switches.length > 0);
               if (rows.length === 0) return;
               const active = document.activeElement;
               let rowIndex = -1;
@@ -1436,7 +1468,7 @@ window.__ModuleLoader__.load({
           const opened = pos !== undefined;
           useEffect(() => {
             if (!opened) return;
-            const rows = rowRefs.current.filter((row) => row != null);
+            const rows = rowRefs.current.filter((row) => row != null && row.switches.length > 0);
             if (rows.length === 0) return;
             const active = document.activeElement;
             if (menuRef.current !== null && active !== null && menuRef.current.contains(active)) return;
@@ -1552,6 +1584,11 @@ window.__ModuleLoader__.load({
              * the way. The accessible name still spells out which scope a dot
              * is. */
             const follows = entry.pinned === false;
+            /* A self-gating tool: the step decides, so the row carries a chip
+             * where the switches would be. It is not a control — no button, no
+             * data-context-control="scope" — and the arrow-key walk skips it. */
+            const auto = entry.auto === true;
+            const autoState = entry.live === true ? t('autoOn') : entry.live === false ? t('autoOff') : t('auto');
             const specs = [
               {
                 scope: 'session',
@@ -1576,7 +1613,7 @@ window.__ModuleLoader__.load({
               'aria-label': entry.name,
               'aria-description': description === '' ? undefined : description,
               'data-context-control-row': entryKey,
-              title: [description, entry.detail ?? ''].filter((part) => part !== '').join('\n'),
+              title: [description, entry.detail ?? '', auto ? t('autoHint') : ''].filter((part) => part !== '').join('\n'),
               style: entry.enabled ? { ...CSS.menuRow, ...CSS.menuRowOn } : CSS.menuRow,
               onMouseEnter: (event) => {
                 event.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12))';
@@ -1592,7 +1629,17 @@ window.__ModuleLoader__.load({
                 ),
                 secondLine === '' ? null : h('span', { style: CSS.menuDesc }, secondLine),
               ),
-              h('span', { style: CSS.switches }, specs.map((spec, column) => {
+              h('span', { style: CSS.switches }, auto
+                ? h('span', {
+                  key: 'auto',
+                  role: 'img',
+                  'aria-label': `${entry.name} · ${autoState}`,
+                  title: t('autoHint'),
+                  'data-context-control-auto': 'true',
+                  'data-context-control-live': entry.live === true ? 'on' : entry.live === false ? 'off' : 'unknown',
+                  style: entry.live === true ? { ...CSS.autoChip, ...CSS.autoChipOn } : CSS.autoChip,
+                }, autoState)
+                : specs.map((spec, column) => {
                 /* Handlers and hold agree on this key: the press state of one
                  * switch never reaches its twin. */
                 const pressKey = `${entryKey}:${spec.scope}`;
@@ -1734,7 +1781,7 @@ window.__ModuleLoader__.load({
               tabRefs.current[next.key]?.focus();
             } else if (event.key === 'ArrowDown') {
               event.preventDefault();
-              const first = rowRefs.current.find((row) => row != null);
+              const first = rowRefs.current.find((row) => row != null && row.switches[0] != null);
               first?.switches[0]?.focus();
             } else if (event.key === 'Home') {
               event.preventDefault();

@@ -4,6 +4,22 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.10.3 — 2026-11-24
+
+- **A tool that gates itself is back in the list — read-only, with the state the
+  step would decide.** 0.10.2 hid conditional registrations (`when`) because the
+  panel could not switch them; hiding them also hid *why* `ask_image` was gone
+  in a multimodal session. The scan now splits into two sets: the tools this
+  panel gates, and the tools that gate themselves. The latter are listed with
+  `auto: true` and `live` (the verdict of their `when` as of this read, or `null`
+  when it cannot be told), drawn as a chip instead of the two switches, never
+  stored, never denied, and refused by `set` with a reason. The verdict is read
+  through `tools.view(undefined).registrations` and cached per session and model
+  selection, so reopening the panel costs nothing and a slow `when` is abandoned
+  after 300 ms instead of holding the popover. It is read-only by construction:
+  the result never reaches `reconcile`, `denyFor` or the stored choices, so a
+  panel read cannot change what the next step admits.
+
 ## 0.10.2 — 2026-11-24
 
 - **A tool that gates itself is not a gate this panel can flip, so it is not

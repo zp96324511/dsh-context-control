@@ -311,7 +311,24 @@ const LIST_OLD = {
   tools: [{ kind: 'tool', name: 'read', enabled: true, official: true, detail: '' }],
 };
 
-const FIXTURES = { s1: LIST, s2: LIST_S2, s3: LIST_OLD };
+/* A self-gating tool: registered with a `when`, so the step decides and the
+ * panel may only report. Three states are represented — the state it would
+ * decide right now (off), the same tool admitted (on), and one whose `when`
+ * could not be read in time (null, shown as a bare "auto"). */
+const LIST_AUTO = {
+  sessionId: 's4',
+  cwd: 'C:\\auto',
+  mcp: [{ kind: 'mcp', name: 'hivemem', enabled: true, workspace: true, pinned: false, official: false, detail: '8 tools' }],
+  skills: [],
+  tools: [
+    { kind: 'tool', name: 'read', enabled: true, workspace: true, pinned: true, official: true, detail: '', description: '' },
+    { kind: 'tool', name: 'ask_image', enabled: false, workspace: false, pinned: false, official: true, auto: true, live: false, detail: '', description: '把图片交给副眼模型' },
+    { kind: 'tool', name: 'vision_bridge', enabled: true, workspace: false, pinned: false, official: true, auto: true, live: true, detail: '', description: '' },
+    { kind: 'tool', name: 'probe_pending', enabled: false, workspace: false, pinned: false, official: true, auto: true, live: null, detail: '', description: '' },
+  ],
+};
+
+const FIXTURES = { s1: LIST, s2: LIST_S2, s3: LIST_OLD, s4: LIST_AUTO };
 
 const DICT_ZH = {
   panel: '组件上下文', none: '无', mcp: 'MCP', skill: 'Skill', tool: '工具', official: '官方', custom: '自配',
@@ -323,6 +340,7 @@ const DICT_ZH = {
     + '两者同时存在时，会话级设置优先。所有变更在下次模型请求时生效。',
   pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具', hintToggle: '使用说明',
   on: '已启用：', busy: '…',
+  auto: '自动', autoOn: '自动 · 开', autoOff: '自动 · 关', autoHint: '该工具由宿主按会话条件自行启停，面板只显示此刻的状态，不能手动开关',
   checkUpdate: '检查更新', checking: '检查中…', upToDate: '已是最新', available: '可升级',
   upgrade: '一键升级', upgrading: '升级中…', upgraded: '已升级',
   upgradedHint: '已升级，重启 dsh web 后生效', reload: '刷新页面', failed: '升级失败', retry: '重试', details: '详情',
@@ -1163,6 +1181,70 @@ const fakeCtx = {
       && (element.text.includes('Expected') || element.text.includes('invalid')));
     assert(rejected.length === 0, `the list was rejected by the client schema: ${rejected.map((element) => element.text)}`);
   });
+
+  /* Self-gating tools: the panel lists them and reports the state the step
+   * would decide right now, but there is nothing to click — a switch here
+   * would promise a write the host refuses. */
+  innerHeight = 800;
+  innerWidth = 1000;
+  anchorTop = 120;
+  instances = new Map();
+  nodeCache.clear();
+  activeElement = null;
+
+  const autoMenu = await (async () => {
+    const view = mount({ type: Pill, props: { sessionId: 's4' } });
+    const anchor = find(view, (element) => element.props?.['data-context-control'] === 'anchor')[0];
+    anchor.children[0].props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    /* The popover opens on the first non-empty tab (mcp here); the rows under
+     * test are the tools, so click that tab first. */
+    const opened = mount({ type: Pill, props: { sessionId: 's4' } });
+    const toolsTab = find(opened, (element) => element.props?.['role'] === 'tab')
+      .find((element) => textOfNode(element).includes('工具'));
+    toolsTab.props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return mount({ type: Pill, props: { sessionId: 's4' } });
+  })();
+
+  check('a self-gating tool is listed read-only, with the state it would decide', () => {
+    const rows = rowList(autoMenu).map((row) => row.props['aria-label']);
+    assert(rows.includes('ask_image'), `listed rows are ${rows}`);
+    const row = rowOf(autoMenu, 'ask_image');
+    assert(switchesIn(row).length === 0, 'a self-gating row offers a switch');
+    assert(find(row, (element) => element.props?.['data-context-control'] === 'scope').length === 0,
+      'a self-gating row carries a scope button');
+    const chip = find(row, (element) => element.props?.['data-context-control-auto'] === 'true')[0];
+    assert(chip !== undefined, 'no auto chip');
+    assert(chip.props['data-context-control-live'] === 'off', `live is ${chip.props['data-context-control-live']}`);
+    assert(textOfNode(chip) === DICT_ZH.autoOff, `the chip reads ${textOfNode(chip)}`);
+    assert(typeof chip.props.title === 'string' && chip.props.title === DICT_ZH.autoHint,
+      `the chip has no explanation: ${chip.props.title}`);
+  });
+
+  check('a state the host could not read reads as a bare "auto"', () => {
+    const chip = find(rowOf(autoMenu, 'probe_pending'), (element) => element.props?.['data-context-control-auto'] === 'true')[0];
+    assert(chip.props['data-context-control-live'] === 'unknown', `live is ${chip.props['data-context-control-live']}`);
+    assert(textOfNode(chip) === DICT_ZH.auto, `the chip reads ${textOfNode(chip)}`);
+  });
+
+  check('an admitted self-gating tool shows on and still offers no switch', () => {
+    const row = rowOf(autoMenu, 'vision_bridge');
+    const chip = find(row, (element) => element.props?.['data-context-control-auto'] === 'true')[0];
+    assert(chip.props['data-context-control-live'] === 'on', `live is ${chip.props['data-context-control-live']}`);
+    assert(textOfNode(chip) === DICT_ZH.autoOn, `the chip reads ${textOfNode(chip)}`);
+    assert(switchesIn(row).length === 0, 'an admitted self-gating row offers a switch');
+  });
+
+  check('the tool tab counts self-gating rows, so the total matches what is listed', () => {
+    const tab = find(autoMenu, (element) => element.props?.['role'] === 'tab')
+      .find((element) => textOfNode(element).includes('工具'));
+    assert(tab !== undefined, 'no tools tab');
+    assert(textOfNode(tab).includes('2/4'), `the tool tab reads ${textOfNode(tab)}`);
+  });
+
+  pointerdown(documentStub.body);
+  mount({ type: Pill, props: { sessionId: 's4' } });
 
   /* Small viewport: the popover must shrink instead of running off the top. */
   innerHeight = 300;

@@ -238,13 +238,19 @@ through `aria-description`.
 - MCP tools are not listed individually (they follow their server switch), and
   `list_mcp_resources` and friends follow the server switch too.
 - A tool registered with `when` decides for itself, once per model step, whether
-  it exists, so it is not a gateable built-in and stays out of the list —
-  `dsh-second-sight`'s `ask_image` only admits on its twin route. Denying one
-  here would not add it to a step that refuses it, and listing it would claim it
-  is available in sessions it never reaches (a multimodal session used to show
-  `ask_image` in the tool tab while the request never carried it). The panel
-  asks `tools.executable()`: without a step's tool set it returns nothing
-  exactly for the conditional registrations.
+  it exists — so it is listed **read-only**: `auto: true`, a chip in place of the
+  two switches, and `live` carrying the verdict as of that read. Nothing is
+  stored, nothing is denied, and `set` refuses it with a reason. `dsh-second-sight`'s
+  `ask_image` is the example: it only admits on its twin route, so a text session
+  shows `auto · on` and a multimodal one shows `auto · off` instead of a stale
+  "enabled" that the request never carried. The verdict is read through
+  `tools.view(undefined).registrations` and cached per session and model
+  selection, so reopening the panel costs nothing; a slow `when` is abandoned
+  after 300 ms and the row falls back to a bare `auto`. Read-only by
+  construction: the probe never reaches `reconcile`, `denyFor` or the stored
+  choices, so a panel read cannot change what the next step admits. On a host
+  that does not expose `executable()`, every built-in stays switchable as before
+  (0.10.2 behaviour: conditional registrations then simply are not listed).
 - The footer row reads left to right as version, status text (`checking…`,
   `up to date`), then the check button — all flush left — with the `?` alone at the
   far right. The usage note is collapsed behind that `?` and only takes room when

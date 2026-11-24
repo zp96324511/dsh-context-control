@@ -89,6 +89,12 @@ function harness({
   ]
   /** Names registered with a `when`: no step, no tool — `executable()` says so. */
   const conditionalTools = new Set(['ask_image'])
+  /** What each self-gating tool decides, given the selection the step carries. */
+  const conditionalWhen = new Map([
+    ['ask_image', ({ modelSelection }) => modelSelection?.model === 'text-model'],
+  ])
+  /** The selection the next model step would carry; a test may flip it. */
+  const selection = { provider: 'opencode-go', model: 'text-model' }
   const executableOf = (name) => (conditionalTools.has(name)
     ? undefined
     : toolSchemas.find((schema) => schema.name === name))
@@ -166,6 +172,11 @@ function harness({
       tools: {
         schemas: () => toolSchemas.filter((schema) => !deniedHere.has(schema.name)),
         executable: (name) => (deniedHere.has(name) ? undefined : executableOf(name)),
+        /* The unscoped registration view, as the host exposes it: enough for
+         * the panel to find a `when`, not enough to change anything. */
+        view: () => ({
+          registrations: new Map(toolSchemas.map((schema) => [schema.name, { when: conditionalWhen.get(schema.name) }])),
+        }),
         restrict: (filter) => {
           restrictCalls.push(filter)
           const added = (filter.deny ?? []).filter((name) => !deniedHere.has(name))
@@ -197,12 +208,17 @@ function harness({
     })
 
     const agent = { id, session: { header: { cwd } }, ctx: agentCtx }
+    /* The same object a step hands to `when` as `modelSelection`. */
+    agent.model = { current: () => selection }
     return agent
   }
 
   const agent = makeAgent('session-under-test')
 
-  return { ctx, agent, makeAgent, listeners, calls, shadows, records, sessionRecords, restrictCalls, toolSchemas, conditionalTools, tool: () => tool }
+  return {
+    ctx, agent, makeAgent, listeners, calls, shadows, records, sessionRecords, restrictCalls,
+    toolSchemas, conditionalTools, conditionalWhen, selection, tool: () => tool,
+  }
 }
 
 /** Let the stubbed inject fibers run their callbacks. */
@@ -220,7 +236,7 @@ const PLAIN_CONFIG = {
 }
 
 test('skill discovery reads through the agent scope, and preset skills are gated', { skip }, async () => {
-  const { ctx, agent, listeners, calls, shadows, restrictCalls, toolSchemas, conditionalTools, tool } = harness()
+  const { ctx, agent, listeners, calls, shadows, restrictCalls, toolSchemas, conditionalTools, conditionalWhen, selection, tool } = harness()
   const dispose = await apply(ctx, PLAIN_CONFIG)
 
   try {
@@ -295,8 +311,9 @@ test('skill discovery reads through the agent scope, and preset skills are gated
      * Gateable tools are listed with their description; MCP tools and the PTC
      * entry point never appear in that list. */
     const withTools = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
-    assert.deepEqual(withTools.tools.map((entry) => entry.name), ['bash', 'read'])
+    assert.deepEqual(withTools.tools.map((entry) => entry.name), ['bash', 'read', 'ask_image'])
     for (const entry of withTools.tools) {
+      if (entry.auto === true) continue
       assert.equal(entry.enabled, true, 'built-in tools start enabled')
       assert.equal(entry.detail, '', 'a tool row carries no cost detail')
       assert.equal(typeof entry.tokens, 'undefined', 'the panel no longer estimates tokens')
@@ -305,8 +322,39 @@ test('skill discovery reads through the agent scope, and preset skills are gated
       'the schema description reaches the panel')
     assert.ok(!withTools.tools.some((entry) => entry.name === 'run_code'), 'protected tools are not listed')
     assert.ok(!withTools.tools.some((entry) => entry.name.startsWith('mcp__')), 'MCP tools are gated via their server')
-    assert.ok(!withTools.tools.some((entry) => entry.name === 'ask_image'),
-      'a tool registered with `when` is not offered as a gate: the step decides, not this panel')
+
+    /* ---- self-gating tools ---- *
+     * A tool registered with `when` is shown read-only: the step decides, so the
+     * panel reports the verdict and offers nothing to click. */
+    const askImage = withTools.tools.find((entry) => entry.name === 'ask_image')
+    assert.equal(askImage.auto, true, 'a self-gating tool is flagged as such')
+    assert.equal(askImage.live, true, 'the text model admits the vision bridge')
+    assert.equal(askImage.enabled, true, 'enabled mirrors the live verdict')
+    assert.equal(askImage.workspace, false, 'a self-gating tool has no workspace default')
+    assert.equal(askImage.pinned, false, 'a self-gating tool is never pinned')
+
+    const refused = JSON.parse(await tool().execute(
+      { action: 'disable', kind: 'tool', target: 'ask_image' }, { agent },
+    ))
+    assert.equal(refused.ok, false, 'a self-gating tool cannot be switched from the panel')
+    assert.match(refused.reason, /read-only/)
+
+    /* The verdict follows the selection the next step carries, without a
+     * re-attach: this is the report the user opened the panel to see. */
+    selection.model = 'vision-model'
+    const vision = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
+    const visionRow = vision.tools.find((entry) => entry.name === 'ask_image')
+    assert.equal(visionRow.auto, true)
+    assert.equal(visionRow.live, false, 'a multimodal model turns the vision bridge off')
+    assert.equal(visionRow.enabled, false)
+    selection.model = 'text-model'
+    const backToText = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
+    assert.equal(backToText.tools.find((entry) => entry.name === 'ask_image').live, true,
+      'switching back to a text model turns it on again')
+
+    /* …and it never joins a deny list: the panel does not gate it. */
+    assert.ok(!restrictCalls.some((call) => (call.deny ?? []).includes('ask_image')),
+      'a self-gating tool was handed to the executor as denied')
 
     /* MCP servers have no description field; their `instructions` prose arrives
      * in the `mcp:<server>` system-prompt section, captured at assembly. */
@@ -354,14 +402,17 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     assert.ok(glob !== undefined, 'a late-registered tool is discovered')
     assert.equal(glob.enabled, true)
 
-    /* …but a late conditional registration stays out: the same `when` rule
-     * applies to the refresh path, not only to the initial attach. */
+    /* …but a late conditional registration is discovered as a read-only row:
+     * the same scan feeds both kinds, on the refresh path too. */
     conditionalTools.add('late_image')
+    conditionalWhen.set('late_image', () => true)
     toolSchemas.push({ name: 'late_image', description: 'vision bridge', parameters: { type: 'object', properties: {} } })
     await listeners.get('tools/change')()
     const regrown = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
-    assert.ok(!regrown.tools.some((entry) => entry.name === 'late_image'),
-      'a late-registered conditional tool is not offered as a gate either')
+    const late = regrown.tools.find((entry) => entry.name === 'late_image')
+    assert.ok(late !== undefined, 'a late-registered self-gating tool is listed')
+    assert.equal(late.auto, true)
+    assert.equal(late.live, true, 'a tool that appeared mid-session gets its verdict too')
   } finally {
     dispose()
   }
