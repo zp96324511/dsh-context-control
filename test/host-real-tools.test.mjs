@@ -121,3 +121,51 @@ test('a scoped agent context still reaches the unscoped registration view', { sk
   assert.equal(agentCtx.tools.executable('conditional_tool'), undefined,
     'the scoped `executable` disagrees with the root one')
 })
+
+/**
+ * The panel's hint names the plugin that registered a self-gating tool. DSH
+ * keeps no owner on the registration, so the name is read from the calling fiber
+ * while `register` is on the stack — an internal field, which is why it is
+ * pinned here rather than only in the fake host.
+ */
+test('the calling plugin is named while register runs', { skip }, async () => {
+  const root = pathToFileURL(internals).href
+  const { Context } = await import(`${root}/cordis/lib/index.js`)
+  const { ToolsService } = await import(`${root}/dsh-tools/lib/index.js`)
+
+  const ctx = new Context()
+  ctx.provide('systemPrompt', { tools: () => () => {} })
+  await ctx.plugin(ToolsService)
+
+  const definition = (name) => ({
+    name,
+    description: 'x',
+    parameters: { type: 'object', properties: {} },
+    output: { schema: { type: 'string' }, render: () => [] },
+  })
+
+  /* Stand in for the panel's wrapper: something installed from a plugin, which
+   * every plugin's later `register` call must still run through. */
+  const proto = Object.getPrototypeOf(ctx.tools)
+  const original = proto.register
+  const seen = []
+  proto.register = function patched(candidate, options) {
+    seen.push({ tool: candidate?.name, owner: this?.ctx?.fiber?.name })
+    return original.call(this, candidate, options)
+  }
+  try {
+    ctx.tools.register(definition('from_root'))
+
+    await ctx.plugin({ name: 'dsh-demo-owner', inject: ['tools'], apply: (child) => { child.tools.register(definition('from_child')) } })
+    await ctx.plugin({ name: 'dsh-other-owner', inject: ['tools'], apply: (child) => { child.tools.register(definition('from_other')) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  } finally {
+    proto.register = original
+  }
+
+  assert.deepEqual(seen, [
+    { tool: 'from_root', owner: 'root' },
+    { tool: 'from_child', owner: 'dsh-demo-owner' },
+    { tool: 'from_other', owner: 'dsh-other-owner' },
+  ], 'the fiber name is not the registering plugin')
+})

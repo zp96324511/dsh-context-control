@@ -54,9 +54,11 @@ window.__ModuleLoader__.load({
         detail: { type: 'string' },
         description: { type: 'string' },
         /* Self-gating tool: the step decides, the panel only reports. `live` is
-         * the verdict as of this read, or null when it cannot be told. */
+         * the verdict as of this read, or null when it cannot be told; `owner`
+         * names the plugin that registered it, when the host could tell. */
         auto: { type: 'boolean' },
         live: { type: ['boolean', 'null'] },
+        owner: { type: 'string' },
       },
       required: ['kind', 'name', 'enabled', 'official', 'detail'],
       additionalProperties: false,
@@ -78,6 +80,8 @@ window.__ModuleLoader__.load({
        * `live` is what the step would decide right now (null = cannot tell). */
       auto: zod.boolean().optional(),
       live: zod.boolean().nullable().optional(),
+      /* The plugin that registered it: the hint names it when the host knows. */
+      owner: zod.string().optional(),
     });
     const listResultSchema = () => zod.object({
       sessionId: zod.string(),
@@ -224,6 +228,7 @@ window.__ModuleLoader__.load({
         autoOn: '自动 · 开',
         autoOff: '自动 · 关',
         autoHint: '该工具由宿主按会话条件自行启停，面板只显示此刻的状态，不能手动开关',
+        autoHintOwned: '该工具由 {owner} 按会话条件自动启停，面板只显示此刻的状态，不能手动开关',
         pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具',
         hintToggle: '使用说明',
         on: '已启用：',
@@ -271,6 +276,7 @@ window.__ModuleLoader__.load({
         autoOn: 'auto · on',
         autoOff: 'auto · off',
         autoHint: 'The host switches this tool from session conditions; the panel reports the state and cannot switch it',
+        autoHintOwned: '{owner} switches this tool from session conditions; the panel reports the state and cannot switch it',
         pillHint: 'Components: click to switch MCP servers, skills and built-in tools on or off',
         hintToggle: 'Usage notes',
         on: 'Enabled: ',
@@ -1589,6 +1595,13 @@ window.__ModuleLoader__.load({
              * data-context-control="scope" — and the arrow-key walk skips it. */
             const auto = entry.auto === true;
             const autoState = entry.live === true ? t('autoOn') : entry.live === false ? t('autoOff') : t('auto');
+            /* The hint names the plugin when the host could attribute the
+             * registration, and stays generic otherwise. */
+            const autoHint = auto
+              ? (typeof entry.owner === 'string' && entry.owner !== ''
+                ? t('autoHintOwned').replace('{owner}', entry.owner)
+                : t('autoHint'))
+              : '';
             const specs = [
               {
                 scope: 'session',
@@ -1613,7 +1626,7 @@ window.__ModuleLoader__.load({
               'aria-label': entry.name,
               'aria-description': description === '' ? undefined : description,
               'data-context-control-row': entryKey,
-              title: [description, entry.detail ?? '', auto ? t('autoHint') : ''].filter((part) => part !== '').join('\n'),
+              title: [description, entry.detail ?? '', autoHint].filter((part) => part !== '').join('\n'),
               style: entry.enabled ? { ...CSS.menuRow, ...CSS.menuRowOn } : CSS.menuRow,
               onMouseEnter: (event) => {
                 event.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12))';
@@ -1634,7 +1647,7 @@ window.__ModuleLoader__.load({
                   key: 'auto',
                   role: 'img',
                   'aria-label': `${entry.name} · ${autoState}`,
-                  title: t('autoHint'),
+                  title: autoHint,
                   'data-context-control-auto': 'true',
                   'data-context-control-live': entry.live === true ? 'on' : entry.live === false ? 'off' : 'unknown',
                   style: entry.live === true ? { ...CSS.autoChip, ...CSS.autoChipOn } : CSS.autoChip,

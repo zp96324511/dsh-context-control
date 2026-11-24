@@ -4,6 +4,23 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.10.4 — 2026-11-24
+
+- **The "auto" hint now names the plugin.** `该工具由宿主按会话条件自动启停` became
+  `该工具由 dsh-second-sight 按会话条件自动启停` (and the English equivalent):
+  a self-gating row reports who owns it, which is what the user is actually
+  asking when the row says it cannot be switched. DSH stores no owner on a
+  registration — `tools.register` keeps `{ definition, when }` and nothing else —
+  so the name is captured where it is still known: the plugin's `apply()`
+  installs one wrapper on `ToolsService.prototype.register` (marked with a
+  `Symbol`, so a reload does not stack a second one), and the wrapper records
+  `this.ctx.fiber.name` — the registering fiber — per tool name. Everything is
+  plugin-side: no DSH file is touched, and the wrapper is transparent (same
+  arguments, same return value, failures `warn` and never reach the
+  registration). Unattributed tools (registered before this plugin loaded, or
+  by the host itself — fiber `root`) keep the generic sentence. A real
+  `ToolsService` test pins the internal field the whole feature stands on.
+
 ## 0.10.3 — 2026-11-24
 
 - **A tool that gates itself is back in the list — read-only, with the state the

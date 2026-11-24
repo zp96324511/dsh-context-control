@@ -100,6 +100,31 @@ function harness({
     : toolSchemas.find((schema) => schema.name === name))
   const restrictCalls = []
 
+  /**
+   * A stand-in for `ToolsService` with its methods on the prototype, so the
+   * plugin's tool-owner wrapper can wrap `register` exactly as it does against
+   * the real service. `fiber.name` is the caller's plugin name — the host
+   * exposes it on the service instance at call time.
+   */
+  class FakeTools {
+    constructor() {
+      this.fiber = { name: 'root' }
+      this.ctx = { fiber: this.fiber }
+      this.registered = 0
+      /** name -> the definition handed to `register`, for the plugin's own tool. */
+      this.definitions = new Map()
+    }
+    schemas() { return toolSchemas }
+    executable(name) { return executableOf(name) }
+    register(definition) {
+      this.registered += 1
+      if (typeof definition?.name === 'string') this.definitions.set(definition.name, definition)
+      return () => {}
+    }
+    restrict() { return () => {} }
+  }
+  const tools = new FakeTools()
+
   const ctx = {
     logger: { warn: () => {}, info: () => {} },
     storageDomain: {
@@ -108,12 +133,7 @@ function harness({
         return { table: tableFor, close: async () => {} }
       },
     },
-    tools: {
-      schemas: () => toolSchemas,
-      executable: (name) => executableOf(name),
-      register: () => () => {},
-      restrict: () => () => {},
-    },
+    tools,
     agents: { list: () => [] },
     skills: {
       list: async (options = {}) => {
@@ -154,9 +174,6 @@ function harness({
     provide: () => {},
     reflect: { provide: () => {}, get: () => undefined, set: () => {} },
   }
-
-  let tool
-  ctx.tools.register = (candidate) => { tool = candidate; return () => {} }
 
   /* An agent context reaches only the services its loop declared: `skills` is
    * not one of them, so it must be used through an injected child fiber — the
@@ -217,7 +234,7 @@ function harness({
 
   return {
     ctx, agent, makeAgent, listeners, calls, shadows, records, sessionRecords, restrictCalls,
-    toolSchemas, conditionalTools, conditionalWhen, selection, tool: () => tool,
+    toolSchemas, conditionalTools, conditionalWhen, selection, tool: () => tools.definitions.get('context_control'),
   }
 }
 
@@ -351,6 +368,8 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     const backToText = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
     assert.equal(backToText.tools.find((entry) => entry.name === 'ask_image').live, true,
       'switching back to a text model turns it on again')
+    assert.equal(backToText.tools.find((entry) => entry.name === 'ask_image').owner, undefined,
+      'a registration made outside any plugin names no owner')
 
     /* …and it never joins a deny list: the panel does not gate it. */
     assert.ok(!restrictCalls.some((call) => (call.deny ?? []).includes('ask_image')),
@@ -413,6 +432,23 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     assert.ok(late !== undefined, 'a late-registered self-gating tool is listed')
     assert.equal(late.auto, true)
     assert.equal(late.live, true, 'a tool that appeared mid-session gets its verdict too')
+
+    /* ---- who registered it ---- *
+     * The panel's hint can name the plugin, but DSH keeps no owner: the name is
+     * read from the calling fiber while `register` is still on the stack. */
+    ctx.tools.fiber.name = 'dsh-second-sight'
+    const owned = { name: 'owned_image', description: 'vision bridge', parameters: { type: 'object', properties: {} } }
+    conditionalTools.add('owned_image')
+    conditionalWhen.set('owned_image', () => true)
+    toolSchemas.push(owned)
+    ctx.tools.register(owned, { when: conditionalWhen.get('owned_image') })
+    await listeners.get('tools/change')()
+    const ownedList = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
+    const ownedRow = ownedList.tools.find((entry) => entry.name === 'owned_image')
+    assert.equal(ownedRow?.auto, true, 'the attributed tool is listed')
+    assert.equal(ownedRow.owner, 'dsh-second-sight', 'the registering plugin is named for the hint')
+    /* The wrapper must be transparent: the registration still went through. */
+    assert.ok(toolSchemas.some((schema) => schema.name === 'owned_image'), 'the wrapped register dropped the call')
   } finally {
     dispose()
   }

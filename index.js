@@ -171,6 +171,12 @@ const RESOURCE_SECTION_NAME = 'mcp-resource-servers'
 const PROTECTED_TOOL_NAMES = new Set(['run_code', 'context_control', 'structured_output'])
 /** Guidance sections owned by one tool are named `tool:<toolName>`. */
 const TOOL_SECTION_PREFIX = 'tool:'
+/**
+ * Marks the `register` wrapper this plugin installs on the tools service, so a
+ * reload finds it and does not stack a second one. Module scope on purpose:
+ * `apply()` installs the wrapper before its own `const`s are initialized.
+ */
+const OWNER_WRAPPED = Symbol('dsh-context-control.tool-owner-wrapper')
 /** Skill sources shipped with DSH itself: default on. Everything else defaults off. */
 const OFFICIAL_SKILL_SOURCES = new Set(['bundled', 'runtime'])
 /**
@@ -277,6 +283,10 @@ Object.defineProperty(ContextControlRemote.prototype, REMOTE_METHOD_DESCRIPTOR, 
 export async function apply(ctx, config) {
   const cfg = () => config
 
+  /* First, before anything else in this plugin registers a tool: start
+   * remembering which plugin owns which tool, for the panel's hint. */
+  rememberToolOwners()
+
   /** sessionId -> live gating state for that agent. */
   const sessions = new Map()
   /** server -> Set<toolName>, accumulated from the global tool view. */
@@ -289,6 +299,8 @@ export async function apply(ctx, config) {
   let globalSeen = new Set()
   /** toolName -> model-facing description, the panel's second line. */
   const toolDescriptions = new Map()
+  /** toolName -> the plugin that registered it, for the panel's auto hint. */
+  const toolOwners = new Map()
   /** server -> MCP `instructions` text captured while assembling the system prompt. */
   const serverDescriptions = new Map()
   /** Re-entrancy guard: reconcile's own dispose/apply fire tools/change. */
@@ -779,6 +791,56 @@ export async function apply(ctx, config) {
   /** How long one panel read may spend probing self-gating tools, in total. */
   const AUTO_PROBE_BUDGET_MS = 300
   const PROBE_TIMED_OUT = Symbol('probe timed out')
+
+  /* ---------- who registered a tool ---------- *
+   * DSH keys the registry by name and keeps no owner: a registration is just
+   * `{ definition, when }` (dsh-tools `register`). The plugin name is only on
+   * the stack while the call is running — `this.ctx.fiber.name` on the service
+   * instance is the fiber that called `register` — so it is captured there and
+   * remembered by tool name. Only the panel's hint uses it; an unknown owner
+   * falls back to the generic sentence. */
+  /** The fiber name of the caller, or undefined when it says nothing useful. */
+  function ownerOf(serviceContext) {
+    try {
+      const name = serviceContext?.fiber?.name
+      /* `root` is the host itself (and every tool registered before any plugin
+       * loaded); naming it would read as nonsense in the hint. */
+      return typeof name === 'string' && name !== '' && name !== 'root' ? name : undefined
+    } catch (error) {
+      return undefined
+    }
+  }
+
+  /**
+   * Remember which plugin registers which tool, for the panel's hint. Wraps the
+   * service's `register` once per process (a reload finds the marker and does
+   * nothing); the wrapper is transparent — same arguments, same return value,
+   * and any failure here must not cost the registration.
+   */
+  function rememberToolOwners() {
+    try {
+      const proto = Object.getPrototypeOf(ctx.tools)
+      if (typeof proto?.register !== 'function' || proto.register[OWNER_WRAPPED] === true) return
+      const original = proto.register
+      const patched = function register(definition, options) {
+        try {
+          const name = definition?.name
+          if (typeof name === 'string' && name !== '') {
+            const owner = ownerOf(this?.ctx)
+            if (owner !== undefined) toolOwners.set(name, owner)
+            else toolOwners.delete(name)
+          }
+        } catch (error) {
+          /* Attribution is a nicety; the registration below is not. */
+        }
+        return original.call(this, definition, options)
+      }
+      Object.defineProperty(patched, OWNER_WRAPPED, { value: true })
+      proto.register = patched
+    } catch (error) {
+      warn(ctx, `tool-owner capture unavailable: ${String(error)}`)
+    }
+  }
 
   /** The selection a step would hand to `when`, as it stands right now. */
   function currentSelection(agent) {
@@ -1376,6 +1438,7 @@ export async function apply(ctx, config) {
         const states = entry !== undefined ? await autoToolStates(entry, autoNames) : new Map()
         for (const toolName of autoNames) {
           const live = states.get(toolName) ?? null
+          const owner = toolOwners.get(toolName)
           tools.push({
             kind: 'tool',
             name: toolName,
@@ -1385,6 +1448,9 @@ export async function apply(ctx, config) {
             official: true,
             auto: true,
             live,
+            /* The hint says who decides, when that is knowable (see
+             * `rememberToolOwners`); omitted otherwise. */
+            ...(owner === undefined ? {} : { owner }),
             detail: '',
             description: oneLine(toolDescriptions.get(toolName) ?? ''),
           })

@@ -322,7 +322,7 @@ const LIST_AUTO = {
   skills: [],
   tools: [
     { kind: 'tool', name: 'read', enabled: true, workspace: true, pinned: true, official: true, detail: '', description: '' },
-    { kind: 'tool', name: 'ask_image', enabled: false, workspace: false, pinned: false, official: true, auto: true, live: false, detail: '', description: '把图片交给副眼模型' },
+    { kind: 'tool', name: 'ask_image', enabled: false, workspace: false, pinned: false, official: true, auto: true, live: false, owner: 'dsh-second-sight', detail: '', description: '把图片交给副眼模型' },
     { kind: 'tool', name: 'vision_bridge', enabled: true, workspace: false, pinned: false, official: true, auto: true, live: true, detail: '', description: '' },
     { kind: 'tool', name: 'probe_pending', enabled: false, workspace: false, pinned: false, official: true, auto: true, live: null, detail: '', description: '' },
   ],
@@ -341,6 +341,7 @@ const DICT_ZH = {
   pillHint: '组件上下文：点击可开关 MCP 服务器、技能与内置工具', hintToggle: '使用说明',
   on: '已启用：', busy: '…',
   auto: '自动', autoOn: '自动 · 开', autoOff: '自动 · 关', autoHint: '该工具由宿主按会话条件自行启停，面板只显示此刻的状态，不能手动开关',
+  autoHintOwned: '该工具由 {owner} 按会话条件自动启停，面板只显示此刻的状态，不能手动开关',
   checkUpdate: '检查更新', checking: '检查中…', upToDate: '已是最新', available: '可升级',
   upgrade: '一键升级', upgrading: '升级中…', upgraded: '已升级',
   upgradedHint: '已升级，重启 dsh web 后生效', reload: '刷新页面', failed: '升级失败', retry: '重试', details: '详情',
@@ -1218,8 +1219,14 @@ const fakeCtx = {
     assert(chip !== undefined, 'no auto chip');
     assert(chip.props['data-context-control-live'] === 'off', `live is ${chip.props['data-context-control-live']}`);
     assert(textOfNode(chip) === DICT_ZH.autoOff, `the chip reads ${textOfNode(chip)}`);
-    assert(typeof chip.props.title === 'string' && chip.props.title === DICT_ZH.autoHint,
-      `the chip has no explanation: ${chip.props.title}`);
+    assert(chip.props.title === DICT_ZH.autoHintOwned.replace('{owner}', 'dsh-second-sight'),
+      `the chip does not name the plugin: ${chip.props.title}`);
+  });
+
+  check('an unattributed self-gating tool keeps the generic hint', () => {
+    const chip = find(rowOf(autoMenu, 'probe_pending'), (element) => element.props?.['data-context-control-auto'] === 'true')[0];
+    assert(chip.props.title === DICT_ZH.autoHint,
+      `a nameless row invented an owner: ${chip.props.title}`);
   });
 
   check('a state the host could not read reads as a bare "auto"', () => {
