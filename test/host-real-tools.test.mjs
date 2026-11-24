@@ -62,8 +62,7 @@ test('a `when` registration is readable through the unscoped view, and only that
     'a plain registration has no `when`')
 })
 
-test('evaluating that `when` out of band leaves the executor untouched', { skip }, async () => {
-  const root = pathToFileURL(internals).href
+test('evaluating that `when` out of band leaves the executor untouched', { skip }, async () => {  const root = pathToFileURL(internals).href
   const { Context } = await import(`${root}/cordis/lib/index.js`)
   const { ToolsService } = await import(`${root}/dsh-tools/lib/index.js`)
 
@@ -86,4 +85,39 @@ test('evaluating that `when` out of band leaves the executor untouched', { skip 
     'probing the `when` changed the registration')
   assert.ok(ctx.tools.definitions().some((entry) => entry.name === 'conditional_tool'),
     'the definition vanished after the probe')
+})
+
+/**
+ * The panel reads through the *agent's* context (that is the `scopeCtx` the
+ * inventory already scans), not the plugin's. A scoped service must still answer
+ * `view(undefined)` with the global layer, which is where a conditionally
+ * registered tool lives.
+ */
+test('a scoped agent context still reaches the unscoped registration view', { skip }, async () => {
+  const root = pathToFileURL(internals).href
+  const { Context } = await import(`${root}/cordis/lib/index.js`)
+  const { ToolsService } = await import(`${root}/dsh-tools/lib/index.js`)
+
+  const ctx = new Context()
+  ctx.provide('systemPrompt', { tools: () => () => {} })
+  await ctx.plugin(ToolsService)
+
+  const conditional = { name: 'conditional_tool', description: 'someday', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: () => [] } }
+  const when = ({ modelSelection }) => modelSelection?.model === 'chosen'
+  ctx.tools.register(conditional, { when })
+
+  /* The shape an agent sees: a child fiber of the context that hosts the
+   * service, exactly how dsh-agent gives every session its own `ctx.tools`. */
+  let agentCtx
+  await ctx.plugin({ name: 'probe-child', inject: ['tools'], apply: (child) => { agentCtx = child } })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.ok(agentCtx !== undefined && agentCtx.tools !== undefined, 'the child context has no tools service')
+
+  assert.equal(typeof agentCtx.tools.view, 'function', 'the scoped service hides `view`')
+  const view = agentCtx.tools.view(undefined)
+  assert.ok(view?.registrations instanceof Map, 'the scoped view has no registration map')
+  assert.equal(view.registrations.get('conditional_tool')?.when, when,
+    'the agent context cannot reach the conditional registration')
+  assert.equal(agentCtx.tools.executable('conditional_tool'), undefined,
+    'the scoped `executable` disagrees with the root one')
 })
