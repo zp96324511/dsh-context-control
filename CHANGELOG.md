@@ -4,6 +4,19 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.10.5 — 2026-11-24
+
+- **The "auto" hint names a plugin even when the capture missed it.** 0.10.4 read
+  the owner from a wrapper around `tools.register`, which only sees registrations
+  made after this plugin applied — a boot-order race. In the real host
+  `dsh-second-sight` applies first (it injects only `llm` and `tools`, while this
+  plugin also waits for `storageDomain`), so `ask_image` was registered before the
+  wrapper existed and its row kept saying `由宿主`. A registration may now declare
+  its own name on the `when` predicate (`Symbol.for('dsh.tool.owner')`);
+  `ownerLabel()` prefers that answer, because it travels with the registration and
+  does not care who applied first, and falls back to the captured name.
+  `dsh-second-sight` 0.6.3 writes it.
+
 ## 0.10.4 — 2026-11-24
 
 - **The "auto" hint now names the plugin.** `该工具由宿主按会话条件自动启停` became

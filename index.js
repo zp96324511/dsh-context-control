@@ -177,6 +177,14 @@ const TOOL_SECTION_PREFIX = 'tool:'
  * `apply()` installs the wrapper before its own `const`s are initialized.
  */
 const OWNER_WRAPPED = Symbol('dsh-context-control.tool-owner-wrapper')
+/**
+ * Where a plugin may name itself on a `when` predicate (see `rememberToolOwners`).
+ * A registry entry is just `{ definition, when }`, so the predicate is the only
+ * object that travels with a tool — and unlike the capture below, it survives a
+ * plugin that registers before this one applies. `Symbol.for` because the
+ * writer is another plugin and cannot import this module.
+ */
+const TOOL_OWNER_KEY = Symbol.for('dsh.tool.owner')
 /** Skill sources shipped with DSH itself: default on. Everything else defaults off. */
 const OFFICIAL_SKILL_SOURCES = new Set(['bundled', 'runtime'])
 /**
@@ -793,12 +801,16 @@ export async function apply(ctx, config) {
   const PROBE_TIMED_OUT = Symbol('probe timed out')
 
   /* ---------- who registered a tool ---------- *
-   * DSH keys the registry by name and keeps no owner: a registration is just
-   * `{ definition, when }` (dsh-tools `register`). The plugin name is only on
-   * the stack while the call is running — `this.ctx.fiber.name` on the service
-   * instance is the fiber that called `register` — so it is captured there and
-   * remembered by tool name. Only the panel's hint uses it; an unknown owner
-   * falls back to the generic sentence. */
+   * Two sources, in this order:
+   *   1. the name a plugin writes on its own `when` (`Symbol.for('dsh.tool.owner')`,
+   *      see `TOOL_OWNER_KEY`) — travels with the registration, so it does not
+   *      care which plugin applied first;
+   *   2. the name captured while `register` ran: DSH keys the registry by name
+   *      and keeps no owner, but `this.ctx.fiber.name` on the service instance is
+   *      the fiber that called `register`. That only works for tools registered
+   *      after this plugin applied, which is a boot-order race — hence source 1.
+   * Only the panel's hint uses either; an unknown owner falls back to the
+   * generic sentence. */
   /** The fiber name of the caller, or undefined when it says nothing useful. */
   function ownerOf(serviceContext) {
     try {
@@ -860,6 +872,22 @@ export async function apply(ctx, config) {
       warn(ctx, `reading the registration of "${name}" failed: ${String(error)}`)
       return undefined
     }
+  }
+
+  /**
+   * The plugin to name in the hint: the owner the registration declares on its
+   * `when`, else whoever `register` was called by. `scopeCtx` is any context
+   * that can see the global layer — with a live agent, its own, so the answer
+   * does not depend on this plugin's context having the service yet.
+   */
+  function ownerLabel(scopeCtx, name) {
+    try {
+      const declared = scopeCtx?.tools?.view?.(undefined)?.registrations?.get(name)?.when?.[TOOL_OWNER_KEY]
+      if (typeof declared === 'string' && declared !== '') return declared
+    } catch (error) {
+      warn(ctx, `reading the declared owner of "${name}" failed: ${String(error)}`)
+    }
+    return toolOwners.get(name)
   }
 
   /**
@@ -1438,7 +1466,7 @@ export async function apply(ctx, config) {
         const states = entry !== undefined ? await autoToolStates(entry, autoNames) : new Map()
         for (const toolName of autoNames) {
           const live = states.get(toolName) ?? null
-          const owner = toolOwners.get(toolName)
+          const owner = ownerLabel(entry !== undefined ? entry.agent.ctx : ctx, toolName)
           tools.push({
             kind: 'tool',
             name: toolName,
@@ -1449,7 +1477,7 @@ export async function apply(ctx, config) {
             auto: true,
             live,
             /* The hint says who decides, when that is knowable (see
-             * `rememberToolOwners`); omitted otherwise. */
+             * `ownerLabel`); omitted otherwise. */
             ...(owner === undefined ? {} : { owner }),
             detail: '',
             description: oneLine(toolDescriptions.get(toolName) ?? ''),

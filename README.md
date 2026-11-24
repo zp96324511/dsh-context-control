@@ -252,11 +252,14 @@ through `aria-description`.
   that does not expose `executable()`, every built-in stays switchable as before
   (0.10.2 behaviour: conditional registrations then simply are not listed).
 - The read-only row's tooltip names the owner: `dsh-second-sight decides this
-  tool from session conditions`. A registration carries no owner, so the plugin
-  captures it at `tools.register` time from `ctx.fiber.name` — one
-  `Symbol`-marked wrapper on the service prototype, installed from this plugin's
-  `apply()` and transparent to the call. A tool registered before this plugin
-  loaded (or by the host itself, fiber `root`) keeps the generic sentence.
+  tool from session conditions`. Two sources, in order: a registration may declare
+  its own name on the `when` predicate (`Symbol.for('dsh.tool.owner')`, what
+  `dsh-second-sight` 0.6.3 does), and that answer travels with the tool so it does
+  not care which plugin applied first; failing that, the name is captured at
+  `tools.register` time from `ctx.fiber.name` — one `Symbol`-marked wrapper on the
+  service prototype, installed from this plugin's `apply()` and transparent to the
+  call, which only sees registrations made after this plugin loaded. A tool with
+  neither (host itself, fiber `root`) keeps the generic sentence.
 - The footer row reads left to right as version, status text (`checking…`,
   `up to date`), then the check button — all flush left — with the `?` alone at the
   far right. The usage note is collapsed behind that `?` and only takes room when

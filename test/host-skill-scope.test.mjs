@@ -449,6 +449,25 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     assert.equal(ownedRow.owner, 'dsh-second-sight', 'the registering plugin is named for the hint')
     /* The wrapper must be transparent: the registration still went through. */
     assert.ok(toolSchemas.some((schema) => schema.name === 'owned_image'), 'the wrapped register dropped the call')
+
+    /* ---- a plugin that names itself on `when` ---- *
+     * The capture above only sees registrations made after this plugin applied,
+     * which is a boot-order race (second-sight applies before context-control and
+     * its ask_image was missed in the real host). A registration can declare its
+     * owner instead, and that answer does not depend on who applied first. */
+    const declared = () => true
+    Object.defineProperty(declared, Symbol.for('dsh.tool.owner'), { value: 'dsh-second-sight' })
+    const announced = { name: 'announced_image', description: 'vision bridge', parameters: { type: 'object', properties: {} } }
+    conditionalTools.add('announced_image')
+    conditionalWhen.set('announced_image', declared)
+    toolSchemas.push(announced)
+    ctx.tools.fiber.name = 'root'
+    ctx.tools.register(announced, { when: declared })
+    await listeners.get('tools/change')()
+    const announcedList = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
+    const announcedRow = announcedList.tools.find((entry) => entry.name === 'announced_image')
+    assert.equal(announcedRow?.auto, true, 'the declared tool is listed')
+    assert.equal(announcedRow.owner, 'dsh-second-sight', 'the owner declared on `when` outranks the capture')
   } finally {
     dispose()
   }
