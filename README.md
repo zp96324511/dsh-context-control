@@ -237,6 +237,14 @@ through `aria-description`.
   that opens the gate, and hiding it would lock the gate from the inside.
 - MCP tools are not listed individually (they follow their server switch), and
   `list_mcp_resources` and friends follow the server switch too.
+- A tool registered with `when` decides for itself, once per model step, whether
+  it exists, so it is not a gateable built-in and stays out of the list —
+  `dsh-second-sight`'s `ask_image` only admits on its twin route. Denying one
+  here would not add it to a step that refuses it, and listing it would claim it
+  is available in sessions it never reaches (a multimodal session used to show
+  `ask_image` in the tool tab while the request never carried it). The panel
+  asks `tools.executable()`: without a step's tool set it returns nothing
+  exactly for the conditional registrations.
 - The footer row reads left to right as version, status text (`checking…`,
   `up to date`), then the check button — all flush left — with the `?` alone at the
   far right. The usage note is collapsed behind that `?` and only takes room when

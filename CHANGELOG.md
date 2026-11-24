@@ -4,6 +4,22 @@ Releases are cut from tags (`v*`), and the publish workflow attaches a
 version-free copy of the tarball plus a `channel.json` to every release — which
 is what an installed copy reads to discover the next version.
 
+## 0.10.2 — 2026-11-24
+
+- **A tool that gates itself is not a gate this panel can flip, so it is not
+  listed.** `dsh-second-sight` registers `ask_image` with `when`: the step
+  decides, per model selection, whether the tool exists at all, and the request
+  for a multimodal session never carried it — yet the tool tab listed it as
+  enabled in every session, and the pill counted it. The inventory now asks
+  `tools.executable()` for each schema; without a step's tool set that probe
+  returns nothing exactly for the conditional registrations, so they drop out
+  of the list, the count, and the deny set. A deny here would not have added
+  the tool to a step that refuses it, so nothing that used to work stops
+  working; a stored `tools.ask_image = false` from an older panel is simply
+  inert. `run_code`, `context_control` and `structured_output` stay protected,
+  and the probe falls back to the old behaviour when a host does not expose
+  `executable()`.
+
 ## 0.10.1 — 2026-11-21
 
 - **The mark is the pill's own grey, and it is tilted.** 0.10.0 shipped it in

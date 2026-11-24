@@ -77,13 +77,21 @@ function harness({
   ]
 
   /* Built-in tool view: two gateable tools, one protected entry point, one MCP
-   * tool (gated through its server, never through the tool list). */
+   * tool (gated through its server, never through the tool list), and one
+   * conditional tool (registered with `when`, so the step decides whether it
+   * exists — the panel must not offer it as a gate). */
   const toolSchemas = [
     { name: 'read', description: 'read a file', parameters: { type: 'object', properties: { path: { type: 'string' } } } },
     { name: 'bash', description: 'run a command', parameters: { type: 'object', properties: { command: { type: 'string' } } } },
     { name: 'run_code', description: 'PTC entry point', parameters: { type: 'object', properties: {} } },
     { name: 'mcp__demo__thing', description: 'MCP tool', parameters: { type: 'object', properties: {} } },
+    { name: 'ask_image', description: 'vision bridge', parameters: { type: 'object', properties: {} } },
   ]
+  /** Names registered with a `when`: no step, no tool — `executable()` says so. */
+  const conditionalTools = new Set(['ask_image'])
+  const executableOf = (name) => (conditionalTools.has(name)
+    ? undefined
+    : toolSchemas.find((schema) => schema.name === name))
   const restrictCalls = []
 
   const ctx = {
@@ -96,6 +104,7 @@ function harness({
     },
     tools: {
       schemas: () => toolSchemas,
+      executable: (name) => executableOf(name),
       register: () => () => {},
       restrict: () => () => {},
     },
@@ -156,6 +165,7 @@ function harness({
     const agentCtx = {
       tools: {
         schemas: () => toolSchemas.filter((schema) => !deniedHere.has(schema.name)),
+        executable: (name) => (deniedHere.has(name) ? undefined : executableOf(name)),
         restrict: (filter) => {
           restrictCalls.push(filter)
           const added = (filter.deny ?? []).filter((name) => !deniedHere.has(name))
@@ -192,7 +202,7 @@ function harness({
 
   const agent = makeAgent('session-under-test')
 
-  return { ctx, agent, makeAgent, listeners, calls, shadows, records, sessionRecords, restrictCalls, toolSchemas, tool: () => tool }
+  return { ctx, agent, makeAgent, listeners, calls, shadows, records, sessionRecords, restrictCalls, toolSchemas, conditionalTools, tool: () => tool }
 }
 
 /** Let the stubbed inject fibers run their callbacks. */
@@ -210,7 +220,7 @@ const PLAIN_CONFIG = {
 }
 
 test('skill discovery reads through the agent scope, and preset skills are gated', { skip }, async () => {
-  const { ctx, agent, listeners, calls, shadows, restrictCalls, toolSchemas, tool } = harness()
+  const { ctx, agent, listeners, calls, shadows, restrictCalls, toolSchemas, conditionalTools, tool } = harness()
   const dispose = await apply(ctx, PLAIN_CONFIG)
 
   try {
@@ -295,6 +305,8 @@ test('skill discovery reads through the agent scope, and preset skills are gated
       'the schema description reaches the panel')
     assert.ok(!withTools.tools.some((entry) => entry.name === 'run_code'), 'protected tools are not listed')
     assert.ok(!withTools.tools.some((entry) => entry.name.startsWith('mcp__')), 'MCP tools are gated via their server')
+    assert.ok(!withTools.tools.some((entry) => entry.name === 'ask_image'),
+      'a tool registered with `when` is not offered as a gate: the step decides, not this panel')
 
     /* MCP servers have no description field; their `instructions` prose arrives
      * in the `mcp:<server>` system-prompt section, captured at assembly. */
@@ -341,6 +353,15 @@ test('skill discovery reads through the agent scope, and preset skills are gated
     const glob = grown.tools.find((entry) => entry.name === 'glob')
     assert.ok(glob !== undefined, 'a late-registered tool is discovered')
     assert.equal(glob.enabled, true)
+
+    /* …but a late conditional registration stays out: the same `when` rule
+     * applies to the refresh path, not only to the initial attach. */
+    conditionalTools.add('late_image')
+    toolSchemas.push({ name: 'late_image', description: 'vision bridge', parameters: { type: 'object', properties: {} } })
+    await listeners.get('tools/change')()
+    const regrown = JSON.parse(await tool().execute({ action: 'list' }, { agent }))
+    assert.ok(!regrown.tools.some((entry) => entry.name === 'late_image'),
+      'a late-registered conditional tool is not offered as a gate either')
   } finally {
     dispose()
   }

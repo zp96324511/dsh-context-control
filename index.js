@@ -711,10 +711,37 @@ export async function apply(ctx, config) {
   }
 
   /**
+   * Whether the panel may offer this tool at all: only registrations without a
+   * `when` are gateable.
+   *
+   * A conditional tool decides for itself, once per model step, whether it
+   * exists (dsh-second-sight's `ask_image` admits only on its twin route). The
+   * panel cannot flip that: a deny here would not add the tool to a step that
+   * refuses it, and listing it claims it is available in sessions it never
+   * reaches — a multimodal session showed `ask_image` in the tool tab while the
+   * request never carried it. `tools.executable()` is the public read that
+   * answers the question: without a step's tool set it returns undefined
+   * exactly for the conditional registrations.
+   * @param scopeCtx - an agent context, or the plugin context for the global view.
+   * @param name - a tool name from that view's schemas.
+   */
+  function gateable(scopeCtx, name) {
+    const executable = scopeCtx.tools?.executable
+    /* An older host without the probe keeps the previous behaviour (list it). */
+    if (typeof executable !== 'function') return true
+    try {
+      return executable.call(scopeCtx.tools, name) !== undefined
+    } catch (error) {
+      warn(ctx, `tool executability probe failed for ${name}: ${String(error)}`)
+      return true
+    }
+  }
+
+  /**
    * Built-in tools this agent can see, minus the MCP names (grouped by server
-   * elsewhere), the shared resource tools, and the protected ones. Reads the
-   * agent's unrestricted view, so call it while this plugin's own restriction
-   * is lifted.
+   * elsewhere), the shared resource tools, the protected ones, and the tools
+   * that gate themselves (see `gateable`). Reads the agent's unrestricted view,
+   * so call it while this plugin's own restriction is lifted.
    * @param scopeCtx - an agent context, or the plugin context for the global view.
    */
   function builtinToolInventory(scopeCtx) {
@@ -731,6 +758,7 @@ export async function apply(ctx, config) {
       if (typeof toolName !== 'string' || toolName === '') continue
       if (MCP_TOOL_NAME.test(toolName)) continue
       if (RESOURCE_TOOL_NAMES.has(toolName) || PROTECTED_TOOL_NAMES.has(toolName)) continue
+      if (!gateable(scopeCtx, toolName)) continue
       known.add(toolName)
       rememberSchema(schema)
     }
